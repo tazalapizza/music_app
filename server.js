@@ -703,6 +703,164 @@ app.get('/api/art', async (req, res) => {
   }
 });
 
+// ---- METADATA EDITING ----
+app.post('/api/edit-meta/get', async (req, res) => {
+  try {
+    const paths = req.body.paths || [];
+    const mm = await import('music-metadata');
+    const files = [];
+    for (const rel of paths) {
+      try {
+        const full = safeResolve(rel);
+        const parsed = await mm.parseFile(full, { duration: false, skipCovers: false });
+        files.push({
+          path: rel,
+          name: path.basename(rel),
+          title: parsed.common.title || '',
+          artist: parsed.common.artist || '',
+          album: parsed.common.album || '',
+          year: parsed.common.year || '',
+          track: (parsed.common.track && parsed.common.track.no) || '',
+          disc: (parsed.common.disk && parsed.common.disk.no) || '',
+          hasArt: !!(parsed.common.picture && parsed.common.picture.length)
+        });
+      } catch {
+        files.push({ path: rel, name: path.basename(rel), title: '', artist: '', album: '', year: '', track: '', disc: '', hasArt: false });
+      }
+    }
+    res.json({ files });
+  } catch (err) {
+    logIssue(`POST /api/edit-meta/get failed: ${err.message}`);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Builds a FLAC picture block (the payload of a Vorbis METADATA_BLOCK_PICTURE
+// comment) for embedding art into ogg/opus, which ffmpeg can't do via an
+// attached-pic stream. All fields big-endian per spec.
+function buildFlacPictureBlock(image, mime) {
+  const mimeBuf = Buffer.from(mime, 'ascii');
+  const buf = Buffer.alloc(4 + 4 + mimeBuf.length + 4 + 4 * 4 + 4 + image.length);
+  let o = 0;
+  buf.writeUInt32BE(3, o); o += 4;                 // type 3 = front cover
+  buf.writeUInt32BE(mimeBuf.length, o); o += 4;
+  mimeBuf.copy(buf, o); o += mimeBuf.length;
+  buf.writeUInt32BE(0, o); o += 4;                 // description length (empty)
+  buf.writeUInt32BE(0, o); o += 4;                 // width (0 = unknown, allowed)
+  buf.writeUInt32BE(0, o); o += 4;                 // height
+  buf.writeUInt32BE(0, o); o += 4;                 // color depth
+  buf.writeUInt32BE(0, o); o += 4;                 // colors used
+  buf.writeUInt32BE(image.length, o); o += 4;
+  image.copy(buf, o);
+  return buf;
+}
+
+const EDIT_TAG_KEYS = { title: 'title', artist: 'artist', album: 'album', year: 'date', track: 'track', disc: 'disc' };
+
+async function writeMetadataEdits(full, tags, art) {
+  const ext = path.extname(full).toLowerCase();
+  const dir = path.dirname(full);
+  const isOggFamily = ext === '.ogg' || ext === '.opus';
+  const artAction = art && art.action;
+  let artTmp = null;
+
+  const buildArgs = (keepArtStream) => {
+    const args = ['-y', '-loglevel', 'error', '-i', full];
+    if (artAction === 'set' && !isOggFamily) {
+      args.push('-i', artTmp, '-map', '0:a', '-map', '1:v', '-c', 'copy', '-disposition:v:0', 'attached_pic');
+    } else if (artAction === 'delete' || (artAction === 'set' && isOggFamily)) {
+      args.push('-map', '0:a', '-c', 'copy');
+    } else {
+      args.push('-map', keepArtStream ? '0' : '0:a', '-c', 'copy');
+    }
+    if (ext === '.mp3') args.push('-id3v2_version', '3');
+    for (const [k, v] of Object.entries(tags || {})) {
+      args.push('-metadata', `${EDIT_TAG_KEYS[k]}=${v}`);
+    }
+    if (isOggFamily && artAction === 'delete') args.push('-metadata', 'METADATA_BLOCK_PICTURE=');
+    if (isOggFamily && artAction === 'set') {
+      const block = buildFlacPictureBlock(Buffer.from(art.data, 'base64'), art.mime);
+      args.push('-metadata', `METADATA_BLOCK_PICTURE=${block.toString('base64')}`);
+    }
+    return args;
+  };
+
+  try {
+    if (artAction === 'set' && !isOggFamily) {
+      artTmp = path.join(dir, `.arttmp_${Date.now()}${art.mime === 'image/png' ? '.png' : '.jpg'}`);
+      await fsp.writeFile(artTmp, Buffer.from(art.data, 'base64'));
+    }
+    const tmp = path.join(dir, `.metatmp_${Date.now()}${ext}`);
+    let result = await runFfmpeg([...buildArgs(true), tmp]);
+    if (result.err) {
+      // A corrupted existing art stream can break -map 0; retry without it
+      // (this drops broken art but salvages the tag edit - logged for visibility).
+      try { await fsp.unlink(tmp); } catch {}
+      result = await runFfmpeg([...buildArgs(false), tmp]);
+      if (!result.err) logIssue(`edit-meta: ${full} required dropping its art stream to write tags (stream was unreadable)`);
+    }
+    if (result.err) {
+      try { await fsp.unlink(tmp); } catch {}
+      return { ok: false, error: (result.stderr || 'ffmpeg write failed').split('\n')[0] };
+    }
+    await fsp.rename(tmp, full);
+    await fixPerms(full);
+    return { ok: true };
+  } finally {
+    if (artTmp) { try { await fsp.unlink(artTmp); } catch {} }
+  }
+}
+
+app.post('/api/edit-meta/apply', requireAuth, async (req, res) => {
+  try {
+    const edits = req.body.edits || [];
+    const results = [];
+    for (const e of edits) {
+      try {
+        const full = safeResolve(e.path);
+        const hasTags = e.tags && Object.keys(e.tags).length > 0;
+        const hasArt = e.art && e.art.action && e.art.action !== 'keep';
+        if (hasTags || hasArt) {
+          const r = await writeMetadataEdits(full, e.tags || {}, e.art || null);
+          if (!r.ok) {
+            logIssue(`edit-meta apply failed for ${e.path}: ${r.error}`);
+            results.push({ path: e.path, ok: false, error: r.error });
+            continue;
+          }
+        }
+        let newPath = null;
+        if (e.newName && e.newName !== path.basename(e.path)) {
+          const destRel = path.join(path.dirname(e.path), e.newName);
+          const destFull = safeResolve(destRel);
+          await moveFile(full, destFull);
+          // keep playlists.json pointing at the renamed file
+          const playlists = loadPlaylists();
+          let changed = false;
+          for (const name of Object.keys(playlists)) {
+            playlists[name] = playlists[name].map(p => {
+              if (p === e.path) { changed = true; return destRel; }
+              return p;
+            });
+          }
+          if (changed) savePlaylists(playlists);
+          newPath = destRel;
+        }
+        metaCache.delete(e.path);
+        if (newPath) metaCache.delete(newPath);
+        results.push({ path: e.path, ok: true, ...(newPath ? { newPath } : {}) });
+      } catch (err) {
+        logIssue(`edit-meta apply failed for ${e.path}: ${err.message}`);
+        results.push({ path: e.path, ok: false, error: err.message });
+      }
+    }
+    markLibraryDirty();
+    res.json({ results });
+  } catch (err) {
+    logIssue(`POST /api/edit-meta/apply failed: ${err.message}`);
+    res.status(400).json({ error: err.message });
+  }
+});
+
 // ---- FILE MANAGEMENT ----
 // ---- Move/rename that survives crossing filesystem boundaries (e.g. /tmp -> a mounted volume) ----
 async function moveFile(src, dest) {

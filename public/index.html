@@ -3,7 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Music</title>
+<title>Vibing</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="favicon-16.png">
+<link rel="shortcut icon" href="favicon.ico">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -122,6 +127,64 @@
       <div class="modal-actions login-actions">
         <button id="loginCancel">Cancel</button>
         <button id="loginOk">Log in</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Metadata editor -->
+  <div id="metaOverlay" class="modal-overlay hidden">
+    <div class="modal meta-modal">
+      <div class="meta-header">
+        <label class="meta-group-toggle" id="metaGroupWrap"><input type="checkbox" id="metaGroupChk"> Edit as group</label>
+        <span id="metaFileCounter" class="meta-file-counter"></span>
+      </div>
+      <div class="meta-file-nav">
+        <button id="metaPrevBtn" title="Previous file">◀</button>
+        <input type="text" id="metaFilename" placeholder="Filename" autocomplete="off">
+        <button id="metaNextBtn" title="Next file">▶</button>
+      </div>
+      <div class="meta-body">
+        <div class="meta-art-panel">
+          <div class="meta-art-preview">
+            <img id="metaArtImg" class="meta-art hidden" alt="">
+            <div id="metaArtPlaceholder" class="meta-art-placeholder">🎵</div>
+            <div id="metaArtSplit" class="meta-art-split hidden">
+              <div class="meta-art-split-half">
+                <img id="metaArtOldImg" class="hidden" alt="">
+                <div id="metaArtOldPlaceholder" class="meta-art-placeholder">🎵</div>
+              </div>
+              <div class="meta-art-split-half meta-art-split-new">
+                <img id="metaArtNewImg" alt="">
+              </div>
+            </div>
+          </div>
+          <div class="meta-art-actions">
+            <button id="metaArtUploadBtn" title="Upload new image">Upload</button>
+            <button id="metaArtDeleteBtn" title="Remove embedded art">Delete</button>
+            <button id="metaArtKeepBtn" title="Keep current art">Reset</button>
+          </div>
+          <label class="meta-art-broadcast" id="metaArtBroadcastWrap" title="Apply this image to every selected file"><input type="checkbox" id="metaArtBroadcastChk"> Use this image</label>
+          <div id="metaArtChangedCount" class="meta-art-changed-count"></div>
+          <div class="meta-art-nav">
+            <button id="metaArtPrevBtn" title="Previous art">◀</button>
+            <span id="metaArtIndex" class="meta-art-index"></span>
+            <button id="metaArtNextBtn" title="Next art">▶</button>
+          </div>
+          <input type="file" id="metaArtInput" accept="image/jpeg,image/png" hidden>
+          <div id="metaArtStatus" class="meta-art-status"></div>
+        </div>
+        <div class="meta-fields">
+          <div class="meta-row"><label for="metaField-title">Title</label><div class="meta-input-wrap"><input type="text" id="metaField-title" autocomplete="off"><button type="button" class="meta-field-arrow-btn" data-field="title" title="Show all values"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></button><datalist id="dl-title"></datalist></div></div>
+          <div class="meta-row"><label for="metaField-artist">Artist</label><div class="meta-input-wrap"><input type="text" id="metaField-artist" autocomplete="off"><button type="button" class="meta-field-arrow-btn" data-field="artist" title="Show all values"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></button><datalist id="dl-artist"></datalist></div></div>
+          <div class="meta-row"><label for="metaField-album">Album</label><div class="meta-input-wrap"><input type="text" id="metaField-album" autocomplete="off"><button type="button" class="meta-field-arrow-btn" data-field="album" title="Show all values"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></button><datalist id="dl-album"></datalist></div></div>
+          <div class="meta-row"><label for="metaField-year">Year</label><div class="meta-input-wrap"><input type="text" id="metaField-year" autocomplete="off"><button type="button" class="meta-field-arrow-btn" data-field="year" title="Show all values"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></button><datalist id="dl-year"></datalist></div></div>
+          <div class="meta-row"><label for="metaField-track">Track</label><div class="meta-input-wrap"><input type="text" id="metaField-track" autocomplete="off"><button type="button" class="meta-field-arrow-btn" data-field="track" title="Show all values"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></button><datalist id="dl-track"></datalist></div></div>
+          <div class="meta-row"><label for="metaField-disc">Disc</label><div class="meta-input-wrap"><input type="text" id="metaField-disc" autocomplete="off"><button type="button" class="meta-field-arrow-btn" data-field="disc" title="Show all values"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></button><datalist id="dl-disc"></datalist></div></div>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button id="metaCancelBtn">Cancel</button>
+        <button id="metaApplyBtn">Apply to all files</button>
       </div>
     </div>
   </div>
