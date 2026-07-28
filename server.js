@@ -538,6 +538,16 @@ try { libIndex = JSON.parse(fs.readFileSync(LIB_INDEX_FILE, 'utf8')); } catch {}
 
 function markLibraryDirty() { libIndexDirty = true; }
 
+// Handles both "N" and "N/total" formats - music-metadata usually parses
+// track/disc numbers into a clean integer, but some tag formats (or slightly
+// malformed ones) leak the raw "N/total" string through instead.
+function parseTrackOrDiscNumber(value) {
+  if (value == null) return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? Math.trunc(value) : null;
+  const m = String(value).trim().match(/^(\d+)/);
+  return m ? parseInt(m[1], 10) : null;
+}
+
 async function walkAudioFiles(rel, out) {
   const full = safeResolve(rel);
   let entries;
@@ -563,11 +573,13 @@ async function ensureLibraryIndex() {
         try {
           const st = await fsp.stat(safeResolve(rel));
           const prev = libIndex[rel];
-          if (prev && prev.mtimeMs === st.mtimeMs) { next[rel] = prev; continue; }
+          const discOk = prev && (prev.disc === null || typeof prev.disc === 'number');
+          if (prev && prev.mtimeMs === st.mtimeMs && discOk) { next[rel] = prev; continue; }
           const entry = {
             mtimeMs: st.mtimeMs, size: st.size,
             title: path.basename(rel, path.extname(rel)),
-            artist: '', albumartist: '', album: '', year: null, duration: null, hasArt: false
+            artist: '', albumartist: '', album: '', year: null, duration: null, hasArt: false,
+            track: null, disc: null
           };
           try {
             const parsed = await mm.parseFile(safeResolve(rel), { duration: true, skipCovers: false });
@@ -578,6 +590,8 @@ async function ensureLibraryIndex() {
             entry.year = parsed.common.year || null;
             entry.duration = parsed.format.duration || null;
             entry.hasArt = !!(parsed.common.picture && parsed.common.picture.length);
+            entry.track = parseTrackOrDiscNumber(parsed.common.track && parsed.common.track.no);
+            entry.disc = parseTrackOrDiscNumber(parsed.common.disk && parsed.common.disk.no);
           } catch {}
           next[rel] = entry;
         } catch {}
@@ -595,8 +609,19 @@ async function ensureLibraryIndex() {
 }
 
 function libSongItem(rel, e) {
-  return { path: rel, name: path.basename(rel), isDir: false, isAudio: true, size: e.size };
+  return { path: rel, name: path.basename(rel), isDir: false, isAudio: true, size: e.size, track: e.track, disc: e.disc, album: e.album };
 }
+
+app.post('/api/library/rebuild', requireAuth, async (req, res) => {
+  try {
+    markLibraryDirty();
+    const idx = await ensureLibraryIndex();
+    res.json({ ok: true, songCount: Object.keys(idx).length });
+  } catch (err) {
+    logIssue(`POST /api/library/rebuild failed: ${err.message}`);
+    res.status(400).json({ error: err.message });
+  }
+});
 
 app.get('/api/library/artist', async (req, res) => {
   try {
@@ -746,44 +771,99 @@ app.post('/api/lyrics/fetch', async (req, res) => {
     const full = safeResolve(rel);
     const mm = await import('music-metadata');
     const parsed = await mm.parseFile(full, { duration: true, skipCovers: true });
-    const track_name = parsed.common.title || path.basename(rel, path.extname(rel));
+    const title = parsed.common.title || '';
     const artist_name = parsed.common.artist || parsed.common.albumartist || '';
     const album_name = parsed.common.album || '';
     const duration = parsed.format.duration ? Math.round(parsed.format.duration) : null;
-
-    if (!artist_name) {
-      return res.json({ found: false });
-    }
-
+    const filenameStem = path.basename(rel, path.extname(rel));
     const headers = { 'User-Agent': 'musicapp/1.0 (self-hosted; https://github.com)' };
-    const getParams = new URLSearchParams({ track_name, artist_name });
-    if (album_name) getParams.set('album_name', album_name);
-    if (duration) getParams.set('duration', String(duration));
 
-    let data = null;
-    try {
-      const r = await fetch(`https://lrclib.net/api/get?${getParams}`, { headers });
-      if (r.ok) data = await r.json();
-    } catch (e) {
-      logIssue(`lyrics fetch (get) network error for ${rel}: ${e.message}`);
+    async function tryGet(track_name, artist, album, dur) {
+      try {
+        const params = new URLSearchParams({ track_name, artist_name: artist });
+        if (album) params.set('album_name', album);
+        if (dur) params.set('duration', String(dur));
+        const r = await fetch(`https://lrclib.net/api/get?${params}`, { headers });
+        if (r.ok) {
+          const data = await r.json();
+          if (data && (data.syncedLyrics || data.plainLyrics)) return data;
+        }
+      } catch (e) {
+        logIssue(`lyrics fetch (get) network error for ${rel}: ${e.message}`);
+      }
+      return null;
     }
 
-    if (!data) {
-      // Exact lookup missed (wrong duration, slightly different title, etc.) -
-      // fall back to fuzzy search and take the top result.
+    function durationMismatch(resultDuration, targetDuration) {
+      return !!(targetDuration && resultDuration && Math.abs(resultDuration - targetDuration) > 5);
+    }
+
+    function scoreResult(result, targetTitle, targetDuration) {
+      // Higher is better. Weighted so a lower-priority factor (synced) can
+      // never outweigh a higher-priority one (title), matching the requested
+      // preference order: title match, then close duration, then synced.
+      // Results more than 5s off in duration never reach this function at
+      // all - see bestResult()/durationMismatch().
+      let score = 0;
+      const resultTitle = (result.trackName || '').trim().toLowerCase();
+      const wantedTitle = (targetTitle || '').trim().toLowerCase();
+      if (wantedTitle && resultTitle) {
+        if (resultTitle === wantedTitle) score += 1000;
+        else if (wantedTitle.includes(resultTitle) || resultTitle.includes(wantedTitle)) score += 500;
+      }
+      if (targetDuration && result.duration) {
+        const diff = Math.abs(result.duration - targetDuration);
+        if (diff <= 1) score += 200;
+        else if (diff <= 3) score += 100;
+        else score += 40;
+      }
+      if (result.syncedLyrics) score += 50;
+      return score;
+    }
+
+    function bestResult(results, targetTitle, targetDuration) {
+      let usable = results.filter(r => r && (r.syncedLyrics || r.plainLyrics));
+      usable = usable.filter(r => !durationMismatch(r.duration, targetDuration));
+      if (!usable.length) return null;
+      usable.sort((a, b) => scoreResult(b, targetTitle, targetDuration) - scoreResult(a, targetTitle, targetDuration));
+      return usable[0];
+    }
+
+    async function trySearch(track_name, targetDuration) {
       try {
-        const searchParams = new URLSearchParams({ track_name, artist_name });
-        const r = await fetch(`https://lrclib.net/api/search?${searchParams}`, { headers });
+        const params = new URLSearchParams({ track_name });
+        const r = await fetch(`https://lrclib.net/api/search?${params}`, { headers });
         if (r.ok) {
           const results = await r.json();
-          if (Array.isArray(results) && results.length) data = results[0];
+          if (Array.isArray(results) && results.length) {
+            const data = bestResult(results, track_name, targetDuration);
+            if (data) return data;
+          }
         }
       } catch (e) {
         logIssue(`lyrics fetch (search) network error for ${rel}: ${e.message}`);
       }
+      return null;
     }
 
-    if (!data || (!data.plainLyrics && !data.syncedLyrics)) {
+    // Progressive fallback - real-world tags are often incomplete. Each step
+    // only runs if the previous one found nothing. Requests are sequential
+    // (awaited one at a time), per LRCLIB's own API guidance.
+    let data = null;
+    if (title && artist_name) {
+      data = await tryGet(title, artist_name, album_name, duration);
+      if (!data && album_name) {
+        data = await tryGet(title, artist_name, null, duration);
+      }
+    }
+    if (!data && title) {
+      data = await trySearch(title, duration);
+    }
+    if (!data && !title) {
+      data = await trySearch(filenameStem, duration);
+    }
+
+    if (!data) {
       return res.json({ found: false });
     }
     res.json({
@@ -814,8 +894,8 @@ app.post('/api/edit-meta/get', async (req, res) => {
           artist: parsed.common.artist || '',
           album: parsed.common.album || '',
           year: parsed.common.year || '',
-          track: (parsed.common.track && parsed.common.track.no) || '',
-          disc: (parsed.common.disk && parsed.common.disk.no) || '',
+          track: parseTrackOrDiscNumber(parsed.common.track && parsed.common.track.no) ?? '',
+          disc: parseTrackOrDiscNumber(parsed.common.disk && parsed.common.disk.no) ?? '',
           lyrics: extractRawLyrics(parsed) || '',
           hasArt: !!(parsed.common.picture && parsed.common.picture.length)
         });

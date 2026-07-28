@@ -160,6 +160,14 @@ body {
 .file-list-wrap.search-mode {
   --grid-template: var(--col-icon-w) minmax(0, 1fr) var(--col-title-w) var(--col-artist-w) var(--col-album-w) var(--col-duration-w) var(--col-size-w) 32px;
 }
+.file-list-wrap.album-view {
+  --grid-template: 36px var(--col-icon-w) minmax(0, 1fr) var(--col-title-w) var(--col-artist-w) var(--col-album-w) var(--col-duration-w) var(--col-size-w) 32px;
+}
+.col-track, .file-track { display: none; }
+.file-list-wrap.album-view .col-track,
+.file-list-wrap.album-view .file-track { display: flex; align-items: center; justify-content: center; }
+.col-track { color: #77777d; font-size: 12px; }
+.file-track { color: #77777d; font-size: 13px; }
 .library-banner {
   display: flex;
   align-items: flex-start;
@@ -208,6 +216,14 @@ body {
   cursor: pointer;
 }
 .lib-play-all-btn:hover { background: #35353a; }
+.disc-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 12px 6px;
+}
+.disc-header-label { font-size: 12px; color: #77777d; font-weight: 600; flex-shrink: 0; white-space: nowrap; }
+.disc-header-line { flex: 1; height: 1px; background: #2a2a2e; }
 .lib-meta { font-size: 13px; color: #a8a8ae; margin-bottom: 4px; }
 .lib-stats { font-size: 12px; color: #77777d; }
 .lib-link { cursor: pointer; }
@@ -526,9 +542,10 @@ body {
 .lyrics-box-wrap.hidden { display: none; }
 .lyrics-box {
   max-height: 0;
+  min-height: 0;
   overflow: hidden;
   background: #1a1a1d;
-  transition: max-height 0.32s ease;
+  transition: max-height 0.45s ease, min-height 0.45s ease;
   display: flex;
   flex-direction: column;
 }
@@ -571,7 +588,7 @@ body {
   justify-content: center;
   cursor: pointer;
   z-index: 4;
-  transition: top 0.32s ease, border-radius 0.15s ease, background 0.15s ease;
+  transition: top 0.45s ease, border-radius 0.15s ease, background 0.15s ease;
   padding: 2px 0 0;
 }
 .lyrics-toggle-btn:hover { color: #e8e8ea; }
@@ -711,8 +728,8 @@ body {
 }
 .player-bar.hidden { display: none; }
 .now-playing {
-  min-width: 200px;
-  max-width: 320px;
+  width: 280px;
+  flex-shrink: 0;
   overflow: hidden;
   display: flex;
   align-items: center;
@@ -806,7 +823,11 @@ body {
     rgba(255,255,255,0.22) var(--played-pct), rgba(255,255,255,0.22) var(--buffered-pct),
     #35353a var(--buffered-pct), #35353a 100%);
 }
-#volumeBar { width: 80px; }
+#volumeBar {
+  width: 80px;
+  --volume-pct: 0%;
+  background: linear-gradient(to right, #6ea8fe 0%, #6ea8fe var(--volume-pct), #35353a var(--volume-pct), #35353a 100%);
+}
 input[type="range"] {
   -webkit-appearance: none;
   appearance: none;
@@ -1062,6 +1083,12 @@ input[type="range"]::-moz-range-thumb {
 .meta-field-dropdown-item.keep-multi { color: #a8a8ae; font-style: italic; }
 
 #settingsBtn { font-size: 15px; }
+#settingsCogIcon { display: inline-block; }
+#settingsCogIcon.spinning { animation: settings-spin 1s linear infinite; }
+@keyframes settings-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
 
 .settings-modal { width: 340px; }
 .settings-title { font-size: 15px; font-weight: 700; margin-bottom: 14px; }
@@ -1093,6 +1120,18 @@ input[type="checkbox"] { accent-color: #6ea8fe; }
   cursor: pointer;
 }
 .settings-modal .modal-actions { margin-top: 6px; }
+.settings-row-buttons { justify-content: center; gap: 8px; border-bottom: none; padding-top: 14px; }
+.settings-row-buttons button {
+  background: #2a2a2e;
+  border: none;
+  color: #e8e8ea;
+  padding: 7px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.settings-row-buttons button:hover { background: #35353a; }
+.settings-row-buttons button:disabled { opacity: 0.6; cursor: default; }
 .meta-row-lyrics {
   align-items: flex-start;
   margin-top: 12px;
@@ -1111,7 +1150,7 @@ input[type="checkbox"] { accent-color: #6ea8fe; }
   padding: 8px;
   line-height: 1.5;
 }
-.meta-lyrics-actions { display: flex; gap: 6px; }
+.meta-lyrics-actions { display: flex; justify-content: space-between; gap: 6px; }
 .meta-lyrics-actions button {
   background: #2a2a2e;
   border: none;
@@ -1120,6 +1159,9 @@ input[type="checkbox"] { accent-color: #6ea8fe; }
   border-radius: 6px;
   font-size: 12px;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
 }
 .meta-lyrics-actions button:hover { background: #35353a; }
 

@@ -169,6 +169,7 @@ async function browse(relPath, opts = {}) {
   fileListWrap.classList.remove('search-mode');
   searchInput.value = '';
   searchClearBtn.classList.add('hidden');
+  if (!opts.keepSort) { sortColumn = null; sortDir = 'asc'; }
   if (!opts.skipHistory && relPath !== (history.state && history.state.path)) {
     history.pushState({ path: relPath }, '', '#' + encodeURIComponent(relPath));
   }
@@ -211,6 +212,7 @@ async function openLibrary(type, name, opts = {}) {
   searchInput.value = '';
   searchClearBtn.classList.add('hidden');
   fileListWrap.classList.add('search-mode'); // rows get the open-containing-folder button
+  if (!opts.keepSort) { sortColumn = null; sortDir = 'asc'; }
   if (!opts.skipHistory) {
     history.pushState({ view: type, name: libraryView.name }, '', `#${type}=${encodeURIComponent(libraryView.name)}`);
   }
@@ -363,6 +365,7 @@ function buildFileRow(item, opts = {}) {
     const counts = item.counts || { songs: 0, folders: 0 };
     const displayName = opts.showFullPath ? (item.path || '/') : item.name;
     row.innerHTML = `
+      <span class="file-track"></span>
       <span class="file-icon folder-icon-wrap">
         <span class="folder-icon-default">${FOLDER_ICON_SVG}</span>
         <button class="folder-icon-play-btn" title="Play folder">▶</button>
@@ -388,6 +391,7 @@ function buildFileRow(item, opts = {}) {
     row.addEventListener('click', (e) => handleRowClick(e, item, () => browse(item.path)));
   } else {
     row.innerHTML = `
+      <span class="file-track">${item.track || ''}</span>
       <span class="file-icon">${item.isAudio ? '🎵' : '📄'}</span>
       <div class="file-name-wrap">
         <div class="file-name">${item.name}</div>
@@ -535,6 +539,7 @@ async function renderFileList(items) {
   clearSelection();
   lastFetchedItems = items;
   lastFetchedIsSearch = false;
+  fileListWrap.classList.remove('album-view');
   const filtered = applyHideNonMusicFilter(items);
   const sorted = await applySort(filtered);
   lastRenderedItems = sorted;
@@ -543,6 +548,30 @@ async function renderFileList(items) {
     fileList.appendChild(buildFileRow(item));
   }
   updateSortIndicators();
+}
+
+function sortByDiscTrackDefault(items) {
+  return [...items].sort((a, b) => {
+    const da = a.disc || 1, db = b.disc || 1;
+    if (da !== db) return da - db;
+    const ta = a.track != null ? a.track : Infinity;
+    const tb = b.track != null ? b.track : Infinity;
+    if (ta !== tb) return ta - tb;
+    return (a.name || '').localeCompare(b.name || '', undefined, { numeric: true });
+  });
+}
+
+function sortByAlbumDiscTrackDefault(items) {
+  return [...items].sort((a, b) => {
+    const aa = (a.album || '').toLowerCase(), ab = (b.album || '').toLowerCase();
+    if (aa !== ab) return aa < ab ? -1 : 1;
+    const da = a.disc || 1, db = b.disc || 1;
+    if (da !== db) return da - db;
+    const ta = a.track != null ? a.track : Infinity;
+    const tb = b.track != null ? b.track : Infinity;
+    if (ta !== tb) return ta - tb;
+    return (a.name || '').localeCompare(b.name || '', undefined, { numeric: true });
+  });
 }
 
 async function renderSearchResults(items) {
@@ -558,13 +587,42 @@ async function renderSearchResults(items) {
     return;
   }
   clearSelection();
-  const sorted = sortColumn
-    ? await applySort(filtered)
-    : [...filtered].sort((a, b) => (a.isDir === b.isDir) ? 0 : (a.isDir ? -1 : 1));
-  lastRenderedItems = sorted;
-  for (const item of sorted) {
-    fileList.appendChild(buildFileRow(item, { showOpenFolder: true, showFullPath: item.isDir }));
+
+  const isAlbumView = libraryView && libraryView.type === 'album';
+  const isArtistView = libraryView && libraryView.type === 'artist';
+  fileListWrap.classList.toggle('album-view', !!isAlbumView);
+
+  if (isAlbumView) {
+    // Group by disc first - sorting (explicit or default) only ever reorders
+    // tracks WITHIN a disc, never across discs.
+    const discs = [...new Set(filtered.map(i => i.disc || 1))].sort((a, b) => a - b);
+    const showDiscHeaders = discs.length > 1;
+    let flattened = [];
+    for (const disc of discs) {
+      const group = filtered.filter(i => (i.disc || 1) === disc);
+      const sortedGroup = sortColumn ? await applySort(group) : sortByDiscTrackDefault(group);
+      if (showDiscHeaders) {
+        const header = document.createElement('div');
+        header.className = 'disc-header';
+        header.innerHTML = `<span class="disc-header-label">Disc ${disc}</span><span class="disc-header-line"></span>`;
+        fileList.appendChild(header);
+      }
+      for (const item of sortedGroup) {
+        fileList.appendChild(buildFileRow(item, { showOpenFolder: true }));
+      }
+      flattened = flattened.concat(sortedGroup);
+    }
+    lastRenderedItems = flattened;
+  } else {
+    const sorted = sortColumn
+      ? await applySort(filtered)
+      : (isArtistView ? sortByAlbumDiscTrackDefault(filtered) : [...filtered].sort((a, b) => (a.isDir === b.isDir) ? 0 : (a.isDir ? -1 : 1)));
+    lastRenderedItems = sorted;
+    for (const item of sorted) {
+      fileList.appendChild(buildFileRow(item, { showOpenFolder: true, showFullPath: item.isDir }));
+    }
   }
+
   if (searchHasMore) {
     const loadMoreBtn = document.createElement('button');
     loadMoreBtn.className = 'load-more-btn';
@@ -1070,15 +1128,20 @@ updateSpeedBtn();
 
 const volumeBar = document.getElementById('volumeBar');
 const muteBtn = document.getElementById('muteBtn');
+function updateVolumeBarFill() {
+  volumeBar.style.setProperty('--volume-pct', volumeBar.value + '%');
+}
 volumeBar.addEventListener('input', (e) => {
   audioEl.volume = e.target.value / 100;
   audioEl.muted = false;
   muteBtn.textContent = e.target.value == 0 ? '🔇' : '🔊';
+  updateVolumeBarFill();
 });
 muteBtn.addEventListener('click', () => {
   audioEl.muted = !audioEl.muted;
   muteBtn.textContent = audioEl.muted ? '🔇' : '🔊';
 });
+updateVolumeBarFill();
 
 document.getElementById('openFolderBtn').addEventListener('click', () => {
   if (queueIndex < 0 || queueIndex >= queue.length) return;
@@ -1107,7 +1170,7 @@ document.getElementById('deleteTrackBtn').addEventListener('click', async () => 
   renderQueue();
   const trackFolder = track.path.includes('/') ? track.path.slice(0, track.path.lastIndexOf('/')) : '';
   if (currentPath === trackFolder) {
-    browse(currentPath);
+    browse(currentPath, { keepSort: true });
   }
 });
 
@@ -1508,7 +1571,7 @@ async function moveItems(items) {
     });
   }
   clearSelection();
-  browse(currentPath);
+  browse(currentPath, { keepSort: true });
 }
 async function deleteItems(items) {
   if (!confirmAction(`Delete ${items.length} items? This cannot be undone.`)) return;
@@ -1519,7 +1582,7 @@ async function deleteItems(items) {
     });
   }
   clearSelection();
-  browse(currentPath);
+  browse(currentPath, { keepSort: true });
 }
 async function showAddToPlaylistMenuMulti(items) {
   const names = Object.keys(playlists);
@@ -1604,7 +1667,7 @@ async function renameItem(item) {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ path: item.path, newName })
     });
-    browse(currentPath);
+    browse(currentPath, { keepSort: true });
   }
 }
 async function moveItem(item) {
@@ -1614,7 +1677,7 @@ async function moveItem(item) {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ path: item.path, destFolder })
     });
-    browse(currentPath);
+    browse(currentPath, { keepSort: true });
   }
 }
 async function deleteItem(item) {
@@ -1623,7 +1686,7 @@ async function deleteItem(item) {
       method: 'DELETE', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ path: item.path })
     });
-    browse(currentPath);
+    browse(currentPath, { keepSort: true });
   }
 }
 
@@ -1634,7 +1697,7 @@ document.getElementById('newFolderBtn').addEventListener('click', async () => {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ path: currentPath, name })
     });
-    browse(currentPath);
+    browse(currentPath, { keepSort: true });
   }
 });
 
@@ -1863,7 +1926,7 @@ async function handleUploadFiles(fileList) {
   if (!files.length) return;
   openUploadPanel();
   await Promise.all(files.map(f => uploadOneFile(f, currentPath)));
-  browse(currentPath);
+  browse(currentPath, { keepSort: true });
 }
 
 function joinRel(base, name) { return base ? `${base}/${name}` : name; }
@@ -1932,7 +1995,7 @@ async function handleDroppedEntries(entries) {
     return uploadOneFile(r.file, destPath, displayName);
   }));
 
-  browse(currentPath);
+  browse(currentPath, { keepSort: true });
 }
 
 uploadInput.addEventListener('change', (e) => {
@@ -2045,7 +2108,7 @@ function closeSettings() {
   settingsOverlay.classList.add('hidden');
   if (hideNonMusicChanged) {
     if (isSearching) performSearch(searchInput.value.trim());
-    else browse(currentPath);
+    else browse(currentPath, { keepSort: true });
   }
   const track = queue[queueIndex];
   if (track) getMeta(track.path).then(meta => applyReplayGain(meta.replayGainDb));
@@ -2055,6 +2118,34 @@ document.getElementById('settingsBtn').addEventListener('click', openSettings);
 document.getElementById('settingsCloseBtn').addEventListener('click', closeSettings);
 settingsOverlay.addEventListener('click', (e) => {
   if (e.target === settingsOverlay) closeSettings();
+});
+
+document.getElementById('resetLayoutBtn').addEventListener('click', () => {
+  localStorage.removeItem('musicapp-layout');
+  document.documentElement.style.removeProperty('--sidebar-w');
+  document.documentElement.style.removeProperty('--lyrics-h');
+  ['title', 'artist', 'album', 'duration', 'size'].forEach(col => {
+    fileListWrap.style.removeProperty(`--col-${col}-w`);
+  });
+  showToast('Layout reset to default');
+});
+
+document.getElementById('rebuildLibraryBtn').addEventListener('click', async (e) => {
+  const btn = e.currentTarget;
+  const settingsCogIcon = document.getElementById('settingsCogIcon');
+  btn.disabled = true;
+  btn.textContent = 'Updating...';
+  settingsCogIcon.classList.add('spinning');
+  try {
+    await api('/api/library/rebuild', { method: 'POST' });
+    showToast('Library metadata updated');
+  } catch (err) {
+    showToast(err.message || 'Failed to update library metadata');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Update library metadata';
+    settingsCogIcon.classList.remove('spinning');
+  }
 });
 
 // ---------- Authentication ----------
@@ -2190,6 +2281,35 @@ function parseLRC(raw) {
   return { synced: anyTimed, lines };
 }
 
+// Fills in missing timestamps (partial/manual sync) by linear interpolation
+// between the nearest known timestamps on either side, using the song's
+// start (0) and end (duration) as boundary anchors when a run of missing
+// lines sits before the first or after the last known timestamp. This is
+// purely for display/scroll purposes - it never touches the stored lyrics.
+function interpolateLyricsTimes(lines, duration) {
+  const known = [];
+  lines.forEach((l, i) => { if (l.time !== null) known.push(i); });
+  if (known.length === 0) return lines.map(l => ({ ...l }));
+
+  const anchors = [
+    { idx: -1, time: 0 },
+    ...known.map(i => ({ idx: i, time: lines[i].time })),
+    { idx: lines.length, time: duration != null ? duration : lines[known[known.length - 1]].time }
+  ];
+
+  const result = lines.map(l => ({ ...l }));
+  for (let a = 0; a < anchors.length - 1; a++) {
+    const start = anchors[a], end = anchors[a + 1];
+    const steps = end.idx - start.idx;
+    if (steps <= 1) continue; // no missing lines between these two anchors
+    for (let i = start.idx + 1; i < end.idx; i++) {
+      const frac = (i - start.idx) / steps;
+      result[i].time = start.time + (end.time - start.time) * frac;
+    }
+  }
+  return result;
+}
+
 function renderLyricsContent() {
   lyricsLinesEl.innerHTML = '';
   const hasLyrics = currentLyrics && currentLyrics.lines.length > 0;
@@ -2224,9 +2344,13 @@ function updateLyricsSync() {
   const dur = audioEl.duration;
 
   if (currentLyrics.synced) {
+    if (!currentLyrics.interpolatedLines && dur && isFinite(dur)) {
+      currentLyrics.interpolatedLines = interpolateLyricsTimes(currentLyrics.lines, dur);
+    }
+    const syncLines = currentLyrics.interpolatedLines || currentLyrics.lines;
     let activeIdx = -1;
-    for (let i = 0; i < currentLyrics.lines.length; i++) {
-      const lineTime = currentLyrics.lines[i].time;
+    for (let i = 0; i < syncLines.length; i++) {
+      const lineTime = syncLines[i].time;
       if (lineTime !== null && lineTime <= t) activeIdx = i;
     }
     const children = lyricsLinesEl.children;
@@ -2714,7 +2838,7 @@ const META_EDITOR_AVAILABLE = !!(metaOverlay && metaGroupWrap && metaGroupChk &&
   metaCancelBtn && metaApplyBtn && document.getElementById('metaLyricsRow') &&
   document.getElementById('metaFilenameSingleRow') && document.getElementById('metaFilenameSingle') &&
   document.getElementById('metaFieldLyrics') && document.getElementById('metaLyricsFetchBtn') &&
-  document.getElementById('metaLyricsDeleteBtn') &&
+  document.getElementById('metaLyricsDeleteBtn') && document.getElementById('metaLyricsLrclibBtn') &&
   META_FIELDS.every(f => document.getElementById(`metaField-${f}`) && document.getElementById(`dl-${f}`)));
 
 if (!META_EDITOR_AVAILABLE) {
@@ -2749,10 +2873,19 @@ document.getElementById('metaFilenameSingle').addEventListener('input', (e) => {
 const metaFieldLyrics = document.getElementById('metaFieldLyrics');
 const metaLyricsFetchBtn = document.getElementById('metaLyricsFetchBtn');
 const metaLyricsDeleteBtn = document.getElementById('metaLyricsDeleteBtn');
+const metaLyricsLrclibBtn = document.getElementById('metaLyricsLrclibBtn');
 
 metaFieldLyrics.addEventListener('input', () => {
   if (!metaEditState || metaEditState.group) return;
   metaEditState.files[metaEditState.idx].lyricsVal = metaFieldLyrics.value;
+});
+
+metaLyricsLrclibBtn.addEventListener('click', () => {
+  if (!metaEditState || metaEditState.group) return;
+  const f = metaEditState.files[metaEditState.idx];
+  const title = (f.vals.title || '').trim();
+  const query = title || f.name.replace(/\.[^./]+$/, '');
+  window.open(`https://lrclib.net/search/${encodeURIComponent(query)}`, '_blank', 'noopener');
 });
 
 metaLyricsDeleteBtn.addEventListener('click', () => {
@@ -2893,9 +3026,9 @@ async function applyMetaEdits() {
     if (playingTrack && edits.some(e => e.path === playingTrack.path || renameMap[e.path] === playingTrack.path)) {
       loadLyricsForTrack(playingTrack.path);
     }
-    if (libraryView) openLibrary(libraryView.type, libraryView.name, { skipHistory: true });
+    if (libraryView) openLibrary(libraryView.type, libraryView.name, { skipHistory: true, keepSort: true });
     else if (isSearching) performSearch(searchInput.value.trim());
-    else browse(currentPath, { skipHistory: true });
+    else browse(currentPath, { skipHistory: true, keepSort: true });
 
     const failures = results.filter(r => !r.ok);
     if (failures.length) {
@@ -2919,8 +3052,12 @@ function confirmAction(message) {
 // ---------- Keyboard shortcuts: left/right arrow seek, space play/pause ----------
 document.addEventListener('keydown', (e) => {
   const tag = (e.target.tagName || '').toLowerCase();
-  if (tag === 'input' || tag === 'textarea' || e.target.isContentEditable) return;
-  if (!settingsOverlay.classList.contains('hidden')) return;
+  const isSeekBar = e.target.id === 'seekBar';
+  if (!isSeekBar && (tag === 'input' || tag === 'textarea' || e.target.isContentEditable)) return;
+  const anyModalOpen = [settingsOverlay, metaOverlay, loginOverlay, modalOverlay].some(
+    el => el && !el.classList.contains('hidden')
+  );
+  if (anyModalOpen) return;
 
   if (e.code === 'Space' || e.key === ' ') {
     if (!playerBarEl.classList.contains('hidden')) {
@@ -2950,6 +3087,7 @@ if (settings.rememberVolume) {
     if (savedVol !== null) {
       audioEl.volume = parseFloat(savedVol);
       volumeBar.value = Math.round(audioEl.volume * 100);
+      updateVolumeBarFill();
     }
   } catch {}
 }
