@@ -5,6 +5,7 @@ const path = require('path');
 const multer = require('multer');
 const { execFile } = require('child_process');
 const crypto = require('crypto');
+const NodeID3 = require('node-id3');
 
 const app = express();
 app.use(express.json({ limit: '25mb' }));
@@ -704,6 +705,99 @@ app.get('/api/art', async (req, res) => {
 });
 
 // ---- METADATA EDITING ----
+// ---- LYRICS ----
+// Reads whatever lyrics tag is present, regardless of container format, as a raw
+// string (LRC-timestamped or plain). We read the NATIVE tag directly rather than
+// music-metadata's parsed common.lyrics, because that field's shape differs by
+// format (some containers get auto-split into {text, syncText}, others don't) -
+// reading natively gives one consistent raw string we parse ourselves everywhere.
+function extractRawLyrics(parsed) {
+  for (const entries of Object.values(parsed.native || {})) {
+    for (const tag of entries) {
+      const id = (tag.id || '').toUpperCase();
+      if (!id.includes('LYR') && id !== 'USLT') continue;
+      const val = tag.value;
+      if (typeof val === 'string' && val) return val;
+      if (val && typeof val.text === 'string' && val.text) return val.text;
+    }
+  }
+  return null;
+}
+
+app.get('/api/lyrics', async (req, res) => {
+  try {
+    const rel = req.query.path;
+    const full = safeResolve(rel);
+    const mm = await import('music-metadata');
+    const parsed = await mm.parseFile(full, { duration: false, skipCovers: true });
+    res.json({ lyrics: extractRawLyrics(parsed) || '' });
+  } catch (err) {
+    logIssue(`GET /api/lyrics?path=${req.query.path || ''} failed: ${err.message}`);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Proxies LRCLIB (https://lrclib.net/docs) so the browser doesn't need CORS
+// access and so we can derive the query from the file's own current tags
+// rather than trusting arbitrary client-supplied values.
+app.post('/api/lyrics/fetch', async (req, res) => {
+  try {
+    const rel = req.body.path;
+    const full = safeResolve(rel);
+    const mm = await import('music-metadata');
+    const parsed = await mm.parseFile(full, { duration: true, skipCovers: true });
+    const track_name = parsed.common.title || path.basename(rel, path.extname(rel));
+    const artist_name = parsed.common.artist || parsed.common.albumartist || '';
+    const album_name = parsed.common.album || '';
+    const duration = parsed.format.duration ? Math.round(parsed.format.duration) : null;
+
+    if (!artist_name) {
+      return res.json({ found: false });
+    }
+
+    const headers = { 'User-Agent': 'musicapp/1.0 (self-hosted; https://github.com)' };
+    const getParams = new URLSearchParams({ track_name, artist_name });
+    if (album_name) getParams.set('album_name', album_name);
+    if (duration) getParams.set('duration', String(duration));
+
+    let data = null;
+    try {
+      const r = await fetch(`https://lrclib.net/api/get?${getParams}`, { headers });
+      if (r.ok) data = await r.json();
+    } catch (e) {
+      logIssue(`lyrics fetch (get) network error for ${rel}: ${e.message}`);
+    }
+
+    if (!data) {
+      // Exact lookup missed (wrong duration, slightly different title, etc.) -
+      // fall back to fuzzy search and take the top result.
+      try {
+        const searchParams = new URLSearchParams({ track_name, artist_name });
+        const r = await fetch(`https://lrclib.net/api/search?${searchParams}`, { headers });
+        if (r.ok) {
+          const results = await r.json();
+          if (Array.isArray(results) && results.length) data = results[0];
+        }
+      } catch (e) {
+        logIssue(`lyrics fetch (search) network error for ${rel}: ${e.message}`);
+      }
+    }
+
+    if (!data || (!data.plainLyrics && !data.syncedLyrics)) {
+      return res.json({ found: false });
+    }
+    res.json({
+      found: true,
+      lyrics: data.syncedLyrics || data.plainLyrics,
+      synced: !!data.syncedLyrics
+    });
+  } catch (err) {
+    logIssue(`POST /api/lyrics/fetch failed: ${err.message}`);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+
 app.post('/api/edit-meta/get', async (req, res) => {
   try {
     const paths = req.body.paths || [];
@@ -712,7 +806,7 @@ app.post('/api/edit-meta/get', async (req, res) => {
     for (const rel of paths) {
       try {
         const full = safeResolve(rel);
-        const parsed = await mm.parseFile(full, { duration: false, skipCovers: false });
+        const parsed = await mm.parseFile(full, { duration: true, skipCovers: false });
         files.push({
           path: rel,
           name: path.basename(rel),
@@ -722,10 +816,11 @@ app.post('/api/edit-meta/get', async (req, res) => {
           year: parsed.common.year || '',
           track: (parsed.common.track && parsed.common.track.no) || '',
           disc: (parsed.common.disk && parsed.common.disk.no) || '',
+          lyrics: extractRawLyrics(parsed) || '',
           hasArt: !!(parsed.common.picture && parsed.common.picture.length)
         });
       } catch {
-        files.push({ path: rel, name: path.basename(rel), title: '', artist: '', album: '', year: '', track: '', disc: '', hasArt: false });
+        files.push({ path: rel, name: path.basename(rel), title: '', artist: '', album: '', year: '', track: '', disc: '', lyrics: '', hasArt: false });
       }
     }
     res.json({ files });
@@ -761,8 +856,20 @@ async function writeMetadataEdits(full, tags, art) {
   const ext = path.extname(full).toLowerCase();
   const dir = path.dirname(full);
   const isOggFamily = ext === '.ogg' || ext === '.opus';
+  const isMp3 = ext === '.mp3';
   const artAction = art && art.action;
   let artTmp = null;
+
+  // Must be captured BEFORE ffmpeg's remux, which converts a real USLT frame
+  // into a TXXX form that NodeID3.read() can no longer see afterward.
+  let existingLyricsBeforeRemux;
+  if (isMp3 && (!tags || tags.lyrics === undefined)) {
+    try {
+      const mm = await import('music-metadata');
+      const parsed = await mm.parseFile(full, { duration: false, skipCovers: true });
+      existingLyricsBeforeRemux = extractRawLyrics(parsed) || '';
+    } catch { /* nothing to preserve if unreadable */ }
+  }
 
   const buildArgs = (keepArtStream) => {
     const args = ['-y', '-loglevel', 'error', '-i', full];
@@ -773,9 +880,19 @@ async function writeMetadataEdits(full, tags, art) {
     } else {
       args.push('-map', keepArtStream ? '0' : '0:a', '-c', 'copy');
     }
-    if (ext === '.mp3') args.push('-id3v2_version', '3');
-    for (const [k, v] of Object.entries(tags || {})) {
-      args.push('-metadata', `${EDIT_TAG_KEYS[k]}=${v}`);
+    if (isMp3) args.push('-id3v2_version', '3');
+    // mp3 text tags are handled entirely via node-id3 below, not ffmpeg: ffmpeg's
+    // ID3 round-trip silently rewrites a real USLT lyrics frame into a TXXX
+    // frame that node-id3 (and a fresh read) then can't recognize or clean up,
+    // leaving stale lyrics behind even after they're explicitly cleared.
+    if (!isMp3) {
+      for (const [k, v] of Object.entries(tags || {})) {
+        if (k === 'lyrics') continue;
+        args.push('-metadata', `${EDIT_TAG_KEYS[k]}=${v}`);
+      }
+      if (tags && tags.lyrics !== undefined) {
+        args.push('-metadata', `lyrics=${tags.lyrics}`);
+      }
     }
     if (isOggFamily && artAction === 'delete') args.push('-metadata', 'METADATA_BLOCK_PICTURE=');
     if (isOggFamily && artAction === 'set') {
@@ -805,6 +922,40 @@ async function writeMetadataEdits(full, tags, art) {
     }
     await fsp.rename(tmp, full);
     await fixPerms(full);
+
+    if (isMp3) {
+      try {
+        // Read the CURRENT state (post-remux, post-art-embed) via node-id3's own
+        // reader, so re-including it in a full-replace write doesn't lose it.
+        const current = NodeID3.read(full) || {};
+        const finalTags = {};
+        const setIfPresent = (key, tagKey, transform) => {
+          const v = (tags && tags[tagKey] !== undefined) ? tags[tagKey] : current[key];
+          if (v !== undefined && v !== null && v !== '') finalTags[key] = transform ? transform(v) : v;
+        };
+        setIfPresent('title', 'title');
+        setIfPresent('artist', 'artist');
+        setIfPresent('album', 'album');
+        setIfPresent('year', 'year');
+        setIfPresent('trackNumber', 'track', String);
+        setIfPresent('partOfSet', 'disc', String);
+        if (current.image) finalTags.image = current.image; // preserve whatever art was just embedded
+        const lyricsVal = (tags && tags.lyrics !== undefined)
+          ? tags.lyrics
+          : (existingLyricsBeforeRemux !== undefined ? existingLyricsBeforeRemux : ((current.unsynchronisedLyrics && current.unsynchronisedLyrics.text) || ''));
+        if (lyricsVal) finalTags.unsynchronisedLyrics = { language: 'eng', text: lyricsVal };
+
+        const ok = NodeID3.write(finalTags, full);
+        if (ok !== true) {
+          logIssue(`edit-meta: NodeID3.write failed for ${full}: ${ok}`);
+          return { ok: false, error: 'failed to write mp3 tags' };
+        }
+        await fixPerms(full);
+      } catch (e) {
+        logIssue(`edit-meta: failed to write mp3 tags for ${full}: ${e.message}`);
+        return { ok: false, error: 'failed to write mp3 tags' };
+      }
+    }
     return { ok: true };
   } finally {
     if (artTmp) { try { await fsp.unlink(artTmp); } catch {} }

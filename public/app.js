@@ -753,9 +753,14 @@ function startMarquee(nameSpan, pathSpan) {
 
 // ---------- Player bar visibility ----------
 const playerBarEl = document.getElementById('playerBar');
-function showPlayerBar() { playerBarEl.classList.remove('hidden'); }
+function showPlayerBar() { playerBarEl.classList.remove('hidden'); document.querySelector('.lyrics-box-wrap').classList.remove('hidden'); }
 function hidePlayerBar() {
   playerBarEl.classList.add('hidden');
+  const lbWrap = document.querySelector('.lyrics-box-wrap');
+  lbWrap.classList.add('hidden');
+  lbWrap.classList.remove('open');
+  document.getElementById('lyricsBox').classList.remove('open');
+  lyricsBoxOpen = false;
   stopMarquee();
   audioEl.pause();
   audioEl.removeAttribute('src');
@@ -789,6 +794,7 @@ function playCurrent() {
   startMarquee(nameEl.querySelector('span'), pathEl.querySelector('span'));
   updatePlayerArt(track.path);
   updatePlayingHighlight();
+  loadLyricsForTrack(track.path);
   getMeta(track.path).then(meta => {
     if (meta.title) {
       nameEl.querySelector('span').textContent = meta.title;
@@ -2137,6 +2143,160 @@ loginOverlay.addEventListener('click', (e) => {
 
 checkAuthStatus();
 
+// ---------- Toast ----------
+const toastEl = document.getElementById('toast');
+let toastTimer = null;
+function showToast(msg) {
+  toastEl.textContent = msg;
+  toastEl.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2500);
+}
+
+// ---------- Lyrics ----------
+let currentLyrics = null; // { synced, lines: [{time, text}] } or null
+let lyricsAutoScroll = true;
+let lyricsBoxOpen = false;
+let lyricsTrackPath = null; // guards against a slow fetch resolving after the track changed again
+
+const lyricsBoxWrap = document.querySelector('.lyrics-box-wrap');
+const lyricsBoxEl = document.getElementById('lyricsBox');
+const lyricsToggleBtn = document.getElementById('lyricsToggleBtn');
+const lyricsContentEl = document.getElementById('lyricsContent');
+const lyricsEmptyEl = document.getElementById('lyricsEmpty');
+const lyricsLinesEl = document.getElementById('lyricsLines');
+const lyricsScrollModeBtn = document.getElementById('lyricsScrollModeBtn');
+const lyricsEditBtn = document.getElementById('lyricsEditBtn');
+const lyricsFetchEmptyBtn = document.getElementById('lyricsFetchEmptyBtn');
+
+// Parses LRC-style "[mm:ss.xx] text" lines. Lines without a timestamp are kept
+// (time: null) so plain/unsynced lyrics still render, just without a highlight.
+function parseLRC(raw) {
+  if (!raw) return { synced: false, lines: [] };
+  const re = /^\[(\d{1,3}):(\d{2})(?:\.(\d{1,3}))?\]\s*(.*)$/;
+  const lines = [];
+  let anyTimed = false;
+  for (const rawLine of raw.split('\n')) {
+    const m = rawLine.match(re);
+    if (m) {
+      anyTimed = true;
+      const min = parseInt(m[1], 10), sec = parseInt(m[2], 10);
+      const frac = m[3] ? parseFloat('0.' + m[3]) : 0;
+      lines.push({ time: min * 60 + sec + frac, text: m[4] || '' });
+    } else if (rawLine.trim()) {
+      lines.push({ time: null, text: rawLine.trim() });
+    }
+  }
+  return { synced: anyTimed, lines };
+}
+
+function renderLyricsContent() {
+  lyricsLinesEl.innerHTML = '';
+  const hasLyrics = currentLyrics && currentLyrics.lines.length > 0;
+  lyricsEmptyEl.classList.toggle('hidden', hasLyrics);
+  if (!hasLyrics) return;
+  currentLyrics.lines.forEach(line => {
+    const div = document.createElement('div');
+    div.className = 'lyrics-line' + (currentLyrics.synced ? '' : ' unsynced');
+    div.textContent = line.text;
+    lyricsLinesEl.appendChild(div);
+  });
+}
+
+async function loadLyricsForTrack(trackPath) {
+  lyricsTrackPath = trackPath;
+  currentLyrics = null;
+  renderLyricsContent();
+  try {
+    const data = await api(`/api/lyrics?path=${encodeURIComponent(trackPath)}`);
+    if (lyricsTrackPath !== trackPath) return; // a newer track started before this resolved
+    currentLyrics = data.lyrics ? parseLRC(data.lyrics) : null;
+  } catch {
+    if (lyricsTrackPath !== trackPath) return;
+    currentLyrics = null;
+  }
+  renderLyricsContent();
+}
+
+function updateLyricsSync() {
+  if (!currentLyrics || !currentLyrics.lines.length || !lyricsLinesEl.children.length) return;
+  const t = audioEl.currentTime;
+  const dur = audioEl.duration;
+
+  if (currentLyrics.synced) {
+    let activeIdx = -1;
+    for (let i = 0; i < currentLyrics.lines.length; i++) {
+      const lineTime = currentLyrics.lines[i].time;
+      if (lineTime !== null && lineTime <= t) activeIdx = i;
+    }
+    const children = lyricsLinesEl.children;
+    for (let i = 0; i < children.length; i++) {
+      children[i].classList.toggle('active', i === activeIdx);
+    }
+    if (lyricsAutoScroll && activeIdx >= 0 && children[activeIdx]) {
+      children[activeIdx].scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+  } else if (lyricsAutoScroll && dur && isFinite(dur)) {
+    // No per-line timing available - scroll proportionally to overall song progress.
+    const scrollable = lyricsContentEl.scrollHeight - lyricsContentEl.clientHeight;
+    if (scrollable > 0) lyricsContentEl.scrollTop = (t / dur) * scrollable;
+  }
+}
+audioEl.addEventListener('timeupdate', updateLyricsSync);
+
+function toggleLyricsBox() {
+  lyricsBoxOpen = !lyricsBoxOpen;
+  lyricsBoxWrap.classList.toggle('open', lyricsBoxOpen);
+  lyricsBoxEl.classList.toggle('open', lyricsBoxOpen);
+  lyricsToggleBtn.title = lyricsBoxOpen ? 'Hide lyrics' : 'Show lyrics';
+}
+lyricsToggleBtn.addEventListener('click', toggleLyricsBox);
+
+function updateScrollModeBtn() {
+  lyricsScrollModeBtn.classList.toggle('on', lyricsAutoScroll);
+  lyricsScrollModeBtn.setAttribute('aria-checked', String(lyricsAutoScroll));
+  document.querySelector('.lyrics-scroll-toggle-wrap').classList.toggle('on', lyricsAutoScroll);
+}
+lyricsScrollModeBtn.addEventListener('click', () => {
+  lyricsAutoScroll = !lyricsAutoScroll;
+  updateScrollModeBtn();
+});
+updateScrollModeBtn();
+
+lyricsEditBtn.addEventListener('click', () => {
+  const track = queue[queueIndex];
+  if (!track) return;
+  openMetadataEditor([{ path: track.path, name: fileNameOf(track.path), isAudio: true }]);
+});
+
+lyricsFetchEmptyBtn.addEventListener('click', async () => {
+  const track = queue[queueIndex];
+  if (!track) return;
+  lyricsFetchEmptyBtn.disabled = true;
+  lyricsFetchEmptyBtn.textContent = 'Fetching...';
+  try {
+    const data = await api('/api/lyrics/fetch', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: track.path })
+    });
+    if (data.found) {
+      await api('/api/edit-meta/apply', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ edits: [{ path: track.path, tags: { lyrics: data.lyrics } }] })
+      });
+      delete metaCache[track.path];
+      await loadLyricsForTrack(track.path);
+    } else {
+      showToast('No matching lyrics found');
+    }
+  } catch (err) {
+    showToast(err.message || 'Failed to fetch lyrics');
+  } finally {
+    lyricsFetchEmptyBtn.disabled = false;
+    lyricsFetchEmptyBtn.textContent = 'Fetch lyrics';
+  }
+});
+
 // ---------- Metadata editor ----------
 const META_FIELDS = ['title', 'artist', 'album', 'year', 'track', 'disc'];
 const KEEP_MULTI = '--- keep multiple values ---';
@@ -2204,6 +2364,7 @@ async function openMetadataEditor(items) {
       return {
         path: f.path, name: f.name, newName: f.name,
         orig, vals: { ...orig },
+        origLyrics: f.lyrics || '', lyricsVal: f.lyrics || '',
         hasArt: f.hasArt,
         art: { action: 'keep' }
       };
@@ -2262,19 +2423,33 @@ function renderMetaEditor() {
   const n = state.files.length;
 
   metaGroupWrap.style.display = n > 1 ? '' : 'none';
+  metaApplyBtn.textContent = n > 1 ? 'Apply all' : 'Apply';
   document.getElementById('metaField-title').closest('.meta-row').classList.toggle('hidden', state.group);
   document.getElementById('metaField-track').closest('.meta-row').classList.toggle('hidden', state.group);
+  document.getElementById('metaLyricsRow').classList.toggle('hidden', state.group);
+  if (!state.group) {
+    document.getElementById('metaFieldLyrics').value = state.files[state.idx].lyricsVal || '';
+  }
   metaGroupChk.checked = state.group;
-  metaFileCounter.textContent = state.group ? `${n} files` : `${state.idx + 1} / ${n}`;
+  metaFileCounter.textContent = n === 1 ? '' : (state.group ? `${n} files` : `${state.idx + 1} / ${n}`);
 
-  const showNav = !state.group && n > 1;
-  metaPrevBtn.style.visibility = showNav ? 'visible' : 'hidden';
-  metaNextBtn.style.visibility = showNav ? 'visible' : 'hidden';
+  const metaFileNavEl = document.querySelector('.meta-file-nav');
+  const metaFilenameSingleRow = document.getElementById('metaFilenameSingleRow');
+  const metaFilenameSingle = document.getElementById('metaFilenameSingle');
 
-  if (state.group) {
-    metaFilename.value = `(${n} files)`;
-    metaFilename.disabled = true;
+  if (n === 1) {
+    metaFileNavEl.style.display = 'none';
+    metaFilenameSingleRow.classList.remove('hidden');
+    metaFilenameSingle.value = state.files[0].newName;
+  } else if (state.group) {
+    metaFileNavEl.style.display = 'none';
+    metaFilenameSingleRow.classList.add('hidden');
   } else {
+    metaFileNavEl.style.display = '';
+    metaFilenameSingleRow.classList.add('hidden');
+    const showNav = n > 1;
+    metaPrevBtn.style.visibility = showNav ? 'visible' : 'hidden';
+    metaNextBtn.style.visibility = showNav ? 'visible' : 'hidden';
     metaFilename.value = state.files[state.idx].newName;
     metaFilename.disabled = false;
   }
@@ -2536,7 +2711,11 @@ const META_EDITOR_AVAILABLE = !!(metaOverlay && metaGroupWrap && metaGroupChk &&
   metaArtSplit && metaArtOldImg && metaArtOldPlaceholder && metaArtNewImg &&
   metaArtUploadBtn && metaArtDeleteBtn && metaArtKeepBtn && metaArtPrevBtn && metaArtNextBtn && metaArtIndex &&
   metaArtBroadcastWrap && metaArtBroadcastChk && metaArtChangedCount && metaArtInput && metaArtStatus &&
-  metaCancelBtn && metaApplyBtn && META_FIELDS.every(f => document.getElementById(`metaField-${f}`) && document.getElementById(`dl-${f}`)));
+  metaCancelBtn && metaApplyBtn && document.getElementById('metaLyricsRow') &&
+  document.getElementById('metaFilenameSingleRow') && document.getElementById('metaFilenameSingle') &&
+  document.getElementById('metaFieldLyrics') && document.getElementById('metaLyricsFetchBtn') &&
+  document.getElementById('metaLyricsDeleteBtn') &&
+  META_FIELDS.every(f => document.getElementById(`metaField-${f}`) && document.getElementById(`dl-${f}`)));
 
 if (!META_EDITOR_AVAILABLE) {
   console.error('Metadata editor UI not found in this page (index.html/style.css out of date vs app.js) — "Edit metadata" will be unavailable until they are redeployed together.');
@@ -2560,6 +2739,50 @@ META_FIELDS.forEach(field => {
 metaFilename.addEventListener('input', () => {
   if (!metaEditState || metaEditState.group) return;
   metaEditState.files[metaEditState.idx].newName = metaFilename.value;
+});
+
+document.getElementById('metaFilenameSingle').addEventListener('input', (e) => {
+  if (!metaEditState || metaEditState.files.length !== 1) return;
+  metaEditState.files[0].newName = e.target.value;
+});
+
+const metaFieldLyrics = document.getElementById('metaFieldLyrics');
+const metaLyricsFetchBtn = document.getElementById('metaLyricsFetchBtn');
+const metaLyricsDeleteBtn = document.getElementById('metaLyricsDeleteBtn');
+
+metaFieldLyrics.addEventListener('input', () => {
+  if (!metaEditState || metaEditState.group) return;
+  metaEditState.files[metaEditState.idx].lyricsVal = metaFieldLyrics.value;
+});
+
+metaLyricsDeleteBtn.addEventListener('click', () => {
+  if (!metaEditState || metaEditState.group) return;
+  metaEditState.files[metaEditState.idx].lyricsVal = '';
+  metaFieldLyrics.value = '';
+});
+
+metaLyricsFetchBtn.addEventListener('click', async () => {
+  if (!metaEditState || metaEditState.group) return;
+  const f = metaEditState.files[metaEditState.idx];
+  metaLyricsFetchBtn.disabled = true;
+  metaLyricsFetchBtn.textContent = 'Fetching...';
+  try {
+    const data = await api('/api/lyrics/fetch', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: f.path })
+    });
+    if (data.found) {
+      f.lyricsVal = data.lyrics;
+      metaFieldLyrics.value = data.lyrics;
+    } else {
+      showToast('No matching lyrics found');
+    }
+  } catch (err) {
+    showToast(err.message || 'Failed to fetch lyrics');
+  } finally {
+    metaLyricsFetchBtn.disabled = false;
+    metaLyricsFetchBtn.textContent = 'Fetch lyrics';
+  }
 });
 
 metaGroupChk.addEventListener('change', () => {
@@ -2625,6 +2848,7 @@ async function applyMetaEdits() {
       const origVal = f.orig[field] || '';
       if (newVal !== origVal) tags[field] = newVal;
     }
+    if ((f.lyricsVal || '') !== (f.origLyrics || '')) tags.lyrics = f.lyricsVal || '';
     let art = null;
     if (f.art.action === 'set') art = { action: 'set', data: f.art.data, mime: f.art.mime };
     else if (f.art.action === 'delete' && f.hasArt) art = { action: 'delete' };
@@ -2665,6 +2889,10 @@ async function applyMetaEdits() {
     }
 
     closeMetaEditor();
+    const playingTrack = queue[queueIndex];
+    if (playingTrack && edits.some(e => e.path === playingTrack.path || renameMap[e.path] === playingTrack.path)) {
+      loadLyricsForTrack(playingTrack.path);
+    }
     if (libraryView) openLibrary(libraryView.type, libraryView.name, { skipHistory: true });
     else if (isSearching) performSearch(searchInput.value.trim());
     else browse(currentPath, { skipHistory: true });
@@ -2677,7 +2905,7 @@ async function applyMetaEdits() {
     alert('Failed to apply changes: ' + err.message);
   } finally {
     metaApplyBtn.disabled = false;
-    metaApplyBtn.textContent = 'Apply to all files';
+    metaApplyBtn.textContent = metaEditState && metaEditState.files.length > 1 ? 'Apply all' : 'Apply';
   }
 }
 metaApplyBtn.addEventListener('click', applyMetaEdits);
@@ -2754,6 +2982,9 @@ function loadLayout() {
     if (layout.sidebarW) {
       document.documentElement.style.setProperty('--sidebar-w', layout.sidebarW + 'px');
     }
+    if (layout.lyricsH) {
+      document.documentElement.style.setProperty('--lyrics-h', layout.lyricsH + 'px');
+    }
     if (layout.cols) {
       Object.entries(layout.cols).forEach(([col, w]) => {
         fileListWrap.style.setProperty(`--col-${col}-w`, w + 'px');
@@ -2769,7 +3000,8 @@ function saveLayout() {
       cols[col] = parseInt(style.getPropertyValue(`--col-${col}-w`), 10);
     });
     const sidebarW = parseInt(getComputedStyle(document.getElementById('sidebar')).width, 10);
-    localStorage.setItem('musicapp-layout', JSON.stringify({ cols, sidebarW }));
+    const lyricsH = parseInt(getComputedStyle(document.getElementById('lyricsBox')).getPropertyValue('--lyrics-h')) || 280;
+    localStorage.setItem('musicapp-layout', JSON.stringify({ cols, sidebarW, lyricsH }));
   } catch {}
 }
 
@@ -2839,6 +3071,32 @@ sidebarResizeHandle.addEventListener('mousedown', (e) => {
 });
 
 loadLayout();
+
+const lyricsResizeHandle = document.getElementById('lyricsResizeHandle');
+lyricsResizeHandle.addEventListener('mousedown', (e) => {
+  e.preventDefault();
+  const startY = e.clientY;
+  const startHeight = lyricsBoxEl.getBoundingClientRect().height;
+  lyricsResizeHandle.classList.add('resizing');
+  lyricsBoxEl.classList.add('no-transition');
+  document.body.style.cursor = 'row-resize';
+  function onMove(ev) {
+    const delta = ev.clientY - startY;
+    const maxHeight = window.innerHeight - 220; // keep the file list from being squeezed to nothing
+    const newHeight = Math.min(maxHeight, Math.max(120, startHeight - delta));
+    document.documentElement.style.setProperty('--lyrics-h', newHeight + 'px');
+  }
+  function onUp() {
+    lyricsResizeHandle.classList.remove('resizing');
+    lyricsBoxEl.classList.remove('no-transition');
+    document.body.style.cursor = '';
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    saveLayout();
+  }
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+});
 
 // ---------- Init ----------
 const initialHash = decodeURIComponent((location.hash || '#').slice(1));
