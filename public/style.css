@@ -681,13 +681,15 @@ body {
   scroll-behavior: smooth;
   text-align: center;
   scrollbar-width: none;
+  display: flex;
+  flex-direction: column;
 }
 .lyrics-content::-webkit-scrollbar { display: none; }
 .lyrics-empty {
   color: #c8c8ce;
   font-size: 13px;
   text-align: center;
-  height: 100%;
+  flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
