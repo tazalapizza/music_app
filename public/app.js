@@ -206,7 +206,14 @@ function formatLongDuration(totalSec) {
 const MUSIC_NOTE_PLACEHOLDER = '<div class="lib-art-placeholder">🎵</div>';
 
 async function openLibrary(type, name, opts = {}) {
-  const data = await api(`/api/library/${type}?name=${encodeURIComponent(name)}`);
+  const settingsCogIcon = document.getElementById('settingsCogIcon');
+  settingsCogIcon.classList.add('spinning');
+  let data;
+  try {
+    data = await api(`/api/library/${type}?name=${encodeURIComponent(name)}`);
+  } finally {
+    settingsCogIcon.classList.remove('spinning');
+  }
   libraryView = { type, name: data.name || name };
   isSearching = false;
   searchInput.value = '';
@@ -814,6 +821,10 @@ const playerBarEl = document.getElementById('playerBar');
 function showPlayerBar() { playerBarEl.classList.remove('hidden'); document.querySelector('.lyrics-box-wrap').classList.remove('hidden'); }
 function hidePlayerBar() {
   playerBarEl.classList.add('hidden');
+  
+  // Fade out the global background
+  document.documentElement.style.setProperty('--blur-opacity', '0');
+  
   const lbWrap = document.querySelector('.lyrics-box-wrap');
   lbWrap.classList.add('hidden');
   lbWrap.classList.remove('open');
@@ -824,7 +835,8 @@ function hidePlayerBar() {
   audioEl.removeAttribute('src');
   document.getElementById('playPauseBtn').textContent = '▶';
   seekBarEl.value = 0;
-  seekBarEl.style.setProperty('--played-pct', '0%'); seekBarEl.style.setProperty('--buffered-pct', '0%');
+  seekBarEl.style.setProperty('--played-pct', '0%'); 
+  seekBarEl.style.setProperty('--buffered-pct', '0%');
   const artImg = document.getElementById('playerArt');
   const artIcon = document.getElementById('playerArtIcon');
   artImg.classList.add('hidden');
@@ -885,21 +897,172 @@ function playCurrent() {
   if (playingEl) playingEl.scrollIntoView({ block: 'start', behavior: 'smooth' });
 }
 
+// Extracts a handful of dominant colors from an image by downsampling it
+// onto a tiny canvas and clustering the resulting pixels into buckets.
+function extractDominantColors(imgEl, count = 4) {
+  const size = 32; // small sample grid is plenty for dominant color extraction
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(imgEl, 0, 0, size, size);
+
+  let data;
+  try {
+    data = ctx.getImageData(0, 0, size, size).data;
+  } catch (e) {
+    // Canvas may be tainted (e.g. cross-origin without CORS headers)
+    return null;
+  }
+
+  // Bucket colors into a coarse grid (4 bits per channel = 4096 buckets)
+  const buckets = new Map();
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i], g = data[i + 1], b = data[i + 2], a = data[i + 3];
+    if (a < 128) continue; // skip transparent pixels
+
+    // Skip near-black / near-white / very low-saturation pixels so we favor
+    // vivid, characterful colors over background padding
+    const max = Math.max(r, g, b), min = Math.min(r, g, b);
+    const lightness = (max + min) / 2;
+    const sat = max === min ? 0 : (max - min) / (255 - Math.abs(2 * lightness - 255));
+    if (lightness < 20 || lightness > 235) continue;
+
+    const key = `${r >> 4}_${g >> 4}_${b >> 4}`;
+    const bucket = buckets.get(key) || { r: 0, g: 0, b: 0, n: 0, weight: 0 };
+    const weight = 0.3 + sat; // favor saturated pixels a bit
+    bucket.r += r * weight;
+    bucket.g += g * weight;
+    bucket.b += b * weight;
+    bucket.n += 1;
+    bucket.weight += weight;
+    buckets.set(key, bucket);
+  }
+
+  // Rank by accumulated saturation-weighted score (bucket.weight), not raw
+  // pixel count. A large but drab/muddy region (foggy background, dull
+  // fabric) would otherwise always win purely on size and get treated as
+  // "the" color, even when a smaller but genuinely vivid area is a much
+  // better representative of the art's character.
+  const sorted = [...buckets.values()]
+    .filter(b => b.n >= 2)
+    .sort((a, b) => b.weight - a.weight);
+
+  const source = sorted.length ? sorted : [...buckets.values()];
+  if (!source.length) return null;
+
+  const colors = [];
+  for (let i = 0; i < count; i++) {
+    const b = source[i % source.length];
+    const r = Math.round(b.r / b.weight);
+    const g = Math.round(b.g / b.weight);
+    const bl = Math.round(b.b / b.weight);
+    colors.push(`rgb(${r}, ${g}, ${bl})`);
+  }
+  return colors;
+}
+
+// Converts "rgb(r, g, b)" to an {h, s, l} triple (h in degrees, s/l in 0-1).
+function rgbStringToHsl(rgbStr) {
+  const m = rgbStr.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+  if (!m) return null;
+  const r = parseInt(m[1], 10) / 255, g = parseInt(m[2], 10) / 255, b = parseInt(m[3], 10) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h, s;
+  const l = (max + min) / 2;
+  if (max === min) {
+    h = 0; s = 0;
+  } else {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+      case g: h = (b - r) / d + 2; break;
+      default: h = (r - g) / d + 4;
+    }
+    h *= 60;
+  }
+  return { h, s, l };
+}
+
+// Clamps a color's lightness/saturation so it stays legible as text/icon fills
+// and thin UI accents against this app's dark chrome (page bg ~#12-#1a, panels
+// ~#26-#2a), regardless of how light, dark, or washed-out the source art is.
+function makeAccentColor(rgbStr) {
+  const hsl = rgbStringToHsl(rgbStr);
+  if (!hsl) return '#e8e8ea';
+  let { h, s, l } = hsl;
+  // Near-grayscale AND weakly-saturated source colors (muddy fog, dull fabric,
+  // desaturated shadows) have an unreliable hue — small sampling differences
+  // can swing it across the color wheel, and even when the hue is "real" it's
+  // faint enough that boosting it hard fabricates a color the art doesn't
+  // actually read as. Bail out to a neutral white/grey instead of inventing
+  // or amplifying a hue when there isn't a strong one to work with.
+  if (s < 0.22) return '#e8e8ea';
+  // Too dark to read against the dark UI, and too light loses definition/feels washed out.
+  l = Math.min(0.72, Math.max(0.5, l));
+  // For art with a real, reasonably confident color, nudge saturation up just
+  // enough to read clearly as "a color" without overpowering a muted source.
+  s = Math.max(0.28, s);
+  return `hsl(${h.toFixed(1)}, ${(s * 100).toFixed(0)}%, ${(l * 100).toFixed(0)}%)`;
+}
+
+function applyBlurColors(colors) {
+  const root = document.documentElement.style;
+  if (!colors || !colors.length) {
+    root.setProperty('--blur-opacity', '0');
+    root.setProperty('--accent-color', '#e8e8ea');
+    return;
+  }
+  for (let i = 0; i < 4; i++) {
+    root.setProperty(`--blur-color-${i + 1}`, colors[i % colors.length]);
+  }
+  root.setProperty('--blur-opacity', '1');
+  // Use the most dominant extracted color as the accent/highlight color, clamped
+  // to a legible lightness/saturation range so it harmonizes with the colored
+  // background without disappearing on very light or very dark album art.
+  root.setProperty('--accent-color', makeAccentColor(colors[0]));
+}
+
 function updatePlayerArt(trackPath) {
   const artImg = document.getElementById('playerArt');
   const artIcon = document.getElementById('playerArtIcon');
+  const artUrl = `/api/art?path=${encodeURIComponent(trackPath)}`;
+
   artImg.classList.add('hidden');
   artIcon.classList.remove('hidden');
+
+  // Temporarily fade out background while the new image loads
+  document.documentElement.style.setProperty('--blur-opacity', '0');
+
+  // Use a separate offscreen image for color sampling so we don't affect
+  // the visible <img>'s crossOrigin/loading behavior.
+  const sampleImg = new Image();
+
   artImg.onload = () => {
     artIcon.classList.add('hidden');
     artImg.classList.remove('hidden');
   };
+
+  sampleImg.onload = () => {
+    const colors = extractDominantColors(sampleImg, 4);
+    applyBlurColors(colors);
+  };
+
+  sampleImg.onerror = () => {
+    document.documentElement.style.setProperty('--blur-opacity', '0');
+  };
+
   artImg.onerror = () => {
     artImg.classList.add('hidden');
     artIcon.classList.remove('hidden');
+    document.documentElement.style.setProperty('--blur-opacity', '0');
   };
-  artImg.src = `/api/art?path=${encodeURIComponent(trackPath)}`;
+
+  artImg.src = artUrl;
+  sampleImg.src = artUrl;
 }
+
 
 document.getElementById('playPauseBtn').addEventListener('click', () => {
   if (justEnded) {
@@ -1128,18 +1291,24 @@ updateSpeedBtn();
 
 const volumeBar = document.getElementById('volumeBar');
 const muteBtn = document.getElementById('muteBtn');
+const muteIconOn = document.getElementById('muteIconOn');
+const muteIconOff = document.getElementById('muteIconOff');
+function setMuteIcon(isMuted) {
+  muteIconOn.classList.toggle('hidden', isMuted);
+  muteIconOff.classList.toggle('hidden', !isMuted);
+}
 function updateVolumeBarFill() {
   volumeBar.style.setProperty('--volume-pct', volumeBar.value + '%');
 }
 volumeBar.addEventListener('input', (e) => {
   audioEl.volume = e.target.value / 100;
   audioEl.muted = false;
-  muteBtn.textContent = e.target.value == 0 ? '🔇' : '🔊';
+  setMuteIcon(e.target.value == 0);
   updateVolumeBarFill();
 });
 muteBtn.addEventListener('click', () => {
   audioEl.muted = !audioEl.muted;
-  muteBtn.textContent = audioEl.muted ? '🔇' : '🔊';
+  setMuteIcon(audioEl.muted);
 });
 updateVolumeBarFill();
 
