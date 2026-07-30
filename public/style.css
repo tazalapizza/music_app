@@ -767,24 +767,19 @@ body {
 .player-blur-bg::before {
   content: "";
   position: absolute;
-  top: -40%; left: -40%; right: -40%; bottom: -40%;
+  top: -60%; left: -60%; right: -60%; bottom: -60%;
 
   background-image:
-    radial-gradient(circle at 20% 25%, var(--blur-color-1) 0%, transparent 55%),
-    radial-gradient(circle at 80% 20%, var(--blur-color-2) 0%, transparent 55%),
-    radial-gradient(circle at 25% 80%, var(--blur-color-3) 0%, transparent 55%),
-    radial-gradient(circle at 80% 80%, var(--blur-color-4) 0%, transparent 55%);
+    radial-gradient(circle at 20% 25%, var(--blur-color-1) 0%, transparent 70%),
+    radial-gradient(circle at 80% 20%, var(--blur-color-2) 0%, transparent 70%),
+    radial-gradient(circle at 25% 80%, var(--blur-color-3) 0%, transparent 70%),
+    radial-gradient(circle at 80% 80%, var(--blur-color-4) 0%, transparent 70%);
   background-repeat: no-repeat;
+  background-blend-mode: screen;
 
-  filter: blur(40px) saturate(1.3) brightness(0.55);
+  filter: blur(60px) saturate(1.3) brightness(0.55);
   opacity: var(--blur-opacity);
   transition: opacity 0.5s ease-in-out, background-image 0.6s ease-in-out;
-  animation: blur-bg-drift 18s ease-in-out infinite alternate;
-}
-@keyframes blur-bg-drift {
-  0%   { transform: translate(0, 0) scale(1); }
-  50%  { transform: translate(-2%, 2%) scale(1.06); }
-  100% { transform: translate(2%, -2%) scale(1); }
 }
 /* Single source of truth for stacking order of everything above the blur layer */
 .player-blur-group > *:not(.player-blur-bg) {
@@ -847,8 +842,10 @@ body {
   background: var(--accent-color);
 }
 .player-controls button.active-state:hover { filter: brightness(1.15); }
+#playPauseBtn { width: 28px; }
+#loopBtn { width: 48px; }
 .loop-label { font-size: 10px; font-weight: 700; margin-left: 2px; vertical-align: 1px; }
-#speedBtn { font-size: 12px; font-weight: 600; min-width: 32px; }
+#speedBtn { font-size: 12px; font-weight: 600; width: 36px; }
 .speed-wrap { position: relative; display: inline-flex; }
 .speed-menu {
   position: absolute;
@@ -879,7 +876,7 @@ body {
 }
 .speed-menu button:hover { background: #35353a; }
 .speed-menu button.active { color: var(--accent-color); font-weight: 700; }
-.time { font-size: 12px; color: #a8a8ae; min-width: 100px; display: inline-flex; align-items: center; height: 28px; }
+.time { font-size: 12px; color: #a8a8ae; min-width: 112px; display: inline-flex; align-items: center; height: 28px; font-variant-numeric: tabular-nums; }
 #seekBar {
   flex: 1;
   min-width: 60px;

@@ -6,6 +6,7 @@ const multer = require('multer');
 const { execFile } = require('child_process');
 const crypto = require('crypto');
 const NodeID3 = require('node-id3');
+const { LRUCache } = require('lru-cache');
 
 const app = express();
 app.use(express.json({ limit: '25mb' }));
@@ -42,6 +43,17 @@ process.on('unhandledRejection', (err) => {
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const sessions = new Map(); // token -> expiry timestamp
+
+// Periodic cleanup so this map doesn't grow unbounded over a long uptime -
+// isValidSession() only removes an entry when that specific token is
+// checked again, so an abandoned expired token would otherwise sit here
+// forever. Mirrors the loginAttempts janitor below.
+setInterval(() => {
+  const now = Date.now();
+  for (const [token, expiry] of sessions) {
+    if (now > expiry) sessions.delete(token);
+  }
+}, 60 * 60 * 1000).unref();
 
 if (!ADMIN_PASSWORD) {
   logIssue('SECURITY WARNING: ADMIN_PASSWORD is not set - all write actions (upload, delete, rename, move, playlists) are locked out until it is configured. Set ADMIN_PASSWORD in docker-compose.yml and restart.');
@@ -252,7 +264,12 @@ app.get('/api/expand', async (req, res) => {
 const SEARCH_PAGE_SIZE = 200;
 const SEARCH_HARD_CAP = 5000; // bounds worst-case traversal time on a huge library / generic query
 
-async function searchRecursive(relPath, needle, ctx) {
+// Directory structure (names/nesting) isn't tracked by libIndex, so folder
+// matches and folder counts still require a real readdir walk. Audio file
+// matches, however, are resolved from libIndex (size, no stat() needed)
+// instead of touching the filesystem per match - this is the expensive part
+// for large libraries since it used to mean a stat() call for every hit.
+async function searchRecursive(relPath, needle, ctx, idx) {
   if (ctx.stop) return;
   const full = safeResolve(relPath);
   let entries;
@@ -272,7 +289,9 @@ async function searchRecursive(relPath, needle, ctx) {
         let size = null;
         let counts = null;
         if (!isDir) {
-          try { size = (await fsp.stat(path.join(full, e.name))).size; } catch {}
+          const indexed = idx[childRel];
+          if (indexed) size = indexed.size;
+          else { try { size = (await fsp.stat(path.join(full, e.name))).size; } catch {} }
         } else {
           counts = await getFolderCounts(path.join(full, e.name));
         }
@@ -292,7 +311,7 @@ async function searchRecursive(relPath, needle, ctx) {
       }
     }
     if (isDir) {
-      await searchRecursive(childRel, needle, ctx);
+      await searchRecursive(childRel, needle, ctx, idx);
     }
   }
 }
@@ -303,8 +322,9 @@ app.get('/api/search', async (req, res) => {
     if (!q) return res.json({ items: [], hasMore: false });
     const scope = req.query.scope || '';
     const offset = Math.max(0, parseInt(req.query.offset, 10) || 0);
+    const idx = await ensureLibraryIndex();
     const ctx = { results: [], matchedCount: 0, offset, stop: false, hardCapped: false };
-    await searchRecursive(scope, q, ctx);
+    await searchRecursive(scope, q, ctx, idx);
     const hasMore = ctx.hardCapped || (ctx.matchedCount - offset) > ctx.results.length;
     res.json({ items: ctx.results, hasMore });
   } catch (err) {
@@ -349,7 +369,9 @@ app.get('/api/stream', async (req, res) => {
 });
 
 // ---- METADATA (title/artist/duration) + ALBUM ART ----
-const metaCache = new Map(); // relPath -> { mtimeMs, data }
+// Entries are small (a few strings/numbers), so capping by entry count is
+// enough here - unlike artCache, which caps by byte size.
+const metaCache = new LRUCache({ max: 20000 }); // relPath -> { mtimeMs, data }
 
 async function readMeta(rel) {
   const full = safeResolve(rel);
@@ -598,7 +620,16 @@ async function ensureLibraryIndex() {
       }
       libIndex = next;
       libIndexDirty = false;
-      try { fs.writeFileSync(LIB_INDEX_FILE, JSON.stringify(libIndex)); }
+      // Write to a temp file then rename over the real one - rename is atomic
+      // on POSIX, so a crash mid-write can't leave library-index.json
+      // truncated/corrupted, and using the async fs API here (vs the previous
+      // writeFileSync) avoids blocking the event loop while the JSON for a
+      // large library is serialized and flushed to disk.
+      try {
+        const tmpFile = `${LIB_INDEX_FILE}.tmp`;
+        await fsp.writeFile(tmpFile, JSON.stringify(libIndex));
+        await fsp.rename(tmpFile, LIB_INDEX_FILE);
+      }
       catch (e) { logIssue(`library index save failed: ${e.message}`); }
       return libIndex;
     } finally {
@@ -713,16 +744,54 @@ app.get('/api/meta', async (req, res) => {
   }
 });
 
+// Batch metadata lookup - used when rendering a folder listing, so the client
+// doesn't have to fire one /api/meta request per audio row. Each path is read
+// through the same metaCache as the single-path endpoint, so results are
+// equally cheap on repeat calls; failures for individual paths don't fail
+// the whole batch.
+const META_BATCH_LIMIT = 500;
+app.post('/api/meta/batch', async (req, res) => {
+  try {
+    const paths = Array.isArray(req.body.paths) ? req.body.paths.slice(0, META_BATCH_LIMIT) : [];
+    const results = await Promise.all(paths.map(async (rel) => {
+      try { return { path: rel, data: await readMeta(rel) }; }
+      catch { return { path: rel, data: null }; }
+    }));
+    const byPath = {};
+    for (const { path: rel, data } of results) byPath[rel] = data;
+    res.json({ meta: byPath });
+  } catch (err) {
+    logIssue(`POST /api/meta/batch failed: ${err.message}`);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Embedded art can be a few MB per track, so this cache is capped by total
+// bytes held rather than entry count. Keyed by path+mtime (like metaCache) so
+// a re-tagged/re-embedded file naturally invalidates its old cached art.
+const artCache = new LRUCache({
+  maxSize: 200 * 1024 * 1024, // 200MB of art bytes across all cached tracks
+  sizeCalculation: (entry) => entry.data.length,
+});
+
 app.get('/api/art', async (req, res) => {
   try {
     const rel = req.query.path;
     const full = safeResolve(rel);
-    const mm = await import('music-metadata');
-    const parsed = await mm.parseFile(full, { duration: false, skipCovers: false });
-    const pic = parsed.common.picture && parsed.common.picture[0];
-    if (!pic) return res.status(404).end();
-    res.writeHead(200, { 'Content-Type': pic.format, 'Cache-Control': 'public, max-age=86400' });
-    res.end(pic.data);
+    const stat = await fsp.stat(full);
+    const cacheKey = `${rel}:${stat.mtimeMs}`;
+    let entry = artCache.get(cacheKey);
+    if (!entry) {
+      const mm = await import('music-metadata');
+      const parsed = await mm.parseFile(full, { duration: false, skipCovers: false });
+      const pic = parsed.common.picture && parsed.common.picture[0];
+      if (!pic) { artCache.set(cacheKey, { missing: true, data: Buffer.alloc(0) }); return res.status(404).end(); }
+      entry = { format: pic.format, data: pic.data };
+      artCache.set(cacheKey, entry);
+    }
+    if (entry.missing) return res.status(404).end();
+    res.writeHead(200, { 'Content-Type': entry.format, 'Cache-Control': 'public, max-age=86400' });
+    res.end(entry.data);
   } catch (err) {
     logIssue(`GET /api/art?path=${req.query.path || ''} failed: ${err.message}`);
     res.status(404).end();
@@ -882,12 +951,14 @@ app.post('/api/edit-meta/get', async (req, res) => {
   try {
     const paths = req.body.paths || [];
     const mm = await import('music-metadata');
-    const files = [];
-    for (const rel of paths) {
+    // Promise.all + map preserves result order to match `paths`, regardless
+    // of which file finishes parsing first - needed since this maps 1:1 back
+    // to the selected tracks in the batch editor UI.
+    const files = await Promise.all(paths.map(async (rel) => {
       try {
         const full = safeResolve(rel);
         const parsed = await mm.parseFile(full, { duration: true, skipCovers: false });
-        files.push({
+        return {
           path: rel,
           name: path.basename(rel),
           title: parsed.common.title || '',
@@ -898,11 +969,11 @@ app.post('/api/edit-meta/get', async (req, res) => {
           disc: parseTrackOrDiscNumber(parsed.common.disk && parsed.common.disk.no) ?? '',
           lyrics: extractRawLyrics(parsed) || '',
           hasArt: !!(parsed.common.picture && parsed.common.picture.length)
-        });
+        };
       } catch {
-        files.push({ path: rel, name: path.basename(rel), title: '', artist: '', album: '', year: '', track: '', disc: '', lyrics: '', hasArt: false });
+        return { path: rel, name: path.basename(rel), title: '', artist: '', album: '', year: '', track: '', disc: '', lyrics: '', hasArt: false };
       }
-    }
+    }));
     res.json({ files });
   } catch (err) {
     logIssue(`POST /api/edit-meta/get failed: ${err.message}`);
@@ -1073,7 +1144,7 @@ app.post('/api/edit-meta/apply', requireAuth, async (req, res) => {
               return p;
             });
           }
-          if (changed) savePlaylists(playlists);
+          if (changed) await savePlaylists(playlists);
           newPath = destRel;
         }
         metaCache.delete(e.path);
@@ -1173,8 +1244,27 @@ app.delete('/api/delete', requireAuth, async (req, res) => {
   }
 });
 
-const upload = multer({ dest: '/tmp/musicapp-uploads' });
-app.post('/api/upload', requireAuth, upload.array('files'), async (req, res) => {
+// Client uploads one file per request (see uploadOneFile in app.js), so
+// files:1 also guards against something other than the app's own UI posting
+// a large multi-file batch directly at this endpoint. 500MB comfortably
+// covers even large lossless FLACs while still bounding worst-case disk/
+// memory use per request.
+const upload = multer({
+  dest: '/tmp/musicapp-uploads',
+  limits: { fileSize: 500 * 1024 * 1024, files: 1 }
+});
+app.post('/api/upload', requireAuth, (req, res, next) => {
+  upload.array('files')(req, res, (err) => {
+    if (err) {
+      const msg = err.code === 'LIMIT_FILE_SIZE' ? 'File is too large (500MB max)'
+        : err.code === 'LIMIT_FILE_COUNT' ? 'Only one file per upload request is allowed'
+        : err.message;
+      logIssue(`POST /api/upload (to ${(req.body && req.body.path) || ''}) rejected: ${msg}`);
+      return res.status(400).json({ error: msg });
+    }
+    next();
+  });
+}, async (req, res) => {
   try {
     const destFolder = req.body.path || '';
     const destFull = safeResolve(destFolder);
@@ -1198,8 +1288,10 @@ app.post('/api/upload', requireAuth, upload.array('files'), async (req, res) => 
 function loadPlaylists() {
   return JSON.parse(fs.readFileSync(PLAYLISTS_FILE, 'utf8'));
 }
-function savePlaylists(data) {
-  fs.writeFileSync(PLAYLISTS_FILE, JSON.stringify(data, null, 2));
+async function savePlaylists(data) {
+  const tmpFile = `${PLAYLISTS_FILE}.tmp`;
+  await fsp.writeFile(tmpFile, JSON.stringify(data, null, 2));
+  await fsp.rename(tmpFile, PLAYLISTS_FILE);
 }
 
 app.get('/api/playlists', (req, res) => {
@@ -1218,7 +1310,7 @@ app.post('/api/playlists/:name', requireAuth, async (req, res) => {
       filesToAdd = filesToAdd.concat(expanded);
     }
     playlists[name] = playlists[name].concat(filesToAdd);
-    savePlaylists(playlists);
+    await savePlaylists(playlists);
     res.json({ ok: true, playlist: playlists[name] });
   } catch (err) {
     logIssue(`POST /api/playlists/${req.params.name} (add) failed: ${err.message}`);
@@ -1226,11 +1318,11 @@ app.post('/api/playlists/:name', requireAuth, async (req, res) => {
   }
 });
 
-app.delete('/api/playlists/:name', requireAuth, (req, res) => {
+app.delete('/api/playlists/:name', requireAuth, async (req, res) => {
   try {
     const playlists = loadPlaylists();
     delete playlists[req.params.name];
-    savePlaylists(playlists);
+    await savePlaylists(playlists);
     res.json({ ok: true });
   } catch (err) {
     logIssue(`DELETE /api/playlists/${req.params.name} failed: ${err.message}`);
@@ -1238,7 +1330,7 @@ app.delete('/api/playlists/:name', requireAuth, (req, res) => {
   }
 });
 
-app.post('/api/playlists/:name/rename', requireAuth, (req, res) => {
+app.post('/api/playlists/:name/rename', requireAuth, async (req, res) => {
   try {
     const playlists = loadPlaylists();
     const oldName = req.params.name;
@@ -1248,7 +1340,7 @@ app.post('/api/playlists/:name/rename', requireAuth, (req, res) => {
     const tracks = playlists[oldName];
     delete playlists[oldName];
     playlists[newName] = (playlists[newName] || []).concat(tracks);
-    savePlaylists(playlists);
+    await savePlaylists(playlists);
     res.json({ ok: true, playlist: playlists[newName] });
   } catch (err) {
     logIssue(`POST /api/playlists/${req.params.name}/rename failed: ${err.message}`);
@@ -1256,13 +1348,13 @@ app.post('/api/playlists/:name/rename', requireAuth, (req, res) => {
   }
 });
 
-app.post('/api/playlists/:name/remove', requireAuth, (req, res) => {
+app.post('/api/playlists/:name/remove', requireAuth, async (req, res) => {
   try {
     const playlists = loadPlaylists();
     const name = req.params.name;
     if (playlists[name]) {
       playlists[name] = playlists[name].filter(f => f !== req.body.file);
-      savePlaylists(playlists);
+      await savePlaylists(playlists);
     }
     res.json({ ok: true, playlist: playlists[name] || [] });
   } catch (err) {
@@ -1271,7 +1363,7 @@ app.post('/api/playlists/:name/remove', requireAuth, (req, res) => {
   }
 });
 
-app.post('/api/playlists/:name/reorder', requireAuth, (req, res) => {
+app.post('/api/playlists/:name/reorder', requireAuth, async (req, res) => {
   try {
     const playlists = loadPlaylists();
     const name = req.params.name;
@@ -1285,7 +1377,7 @@ app.post('/api/playlists/:name/reorder', requireAuth, (req, res) => {
     }
     const [moved] = list.splice(from, 1);
     list.splice(to, 0, moved);
-    savePlaylists(playlists);
+    await savePlaylists(playlists);
     res.json({ ok: true, playlist: list });
   } catch (err) {
     logIssue(`POST /api/playlists/${req.params.name}/reorder failed: ${err.message}`);

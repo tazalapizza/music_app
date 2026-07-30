@@ -12,6 +12,17 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <!-- Icon sprite: symbols reused via <use> below instead of duplicating the
+       same inline SVG markup at every call site. Paths carry no fill/stroke/
+       size of their own so each <use> still inherits its own styling from
+       the wrapping <svg> (color, stroke-width, dimensions) exactly as the
+       inline copies did. -->
+  <svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+    <symbol id="icon-chevron-down" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"></polyline></symbol>
+    <symbol id="icon-folder" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></symbol>
+    <symbol id="icon-trash" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></symbol>
+    <symbol id="icon-shuffle" viewBox="0 0 24 24"><polyline points="16 3 21 3 21 8"></polyline><line x1="4" y1="20" x2="21" y2="3"></line><polyline points="21 16 21 21 16 21"></polyline><line x1="15" y1="15" x2="21" y2="21"></line><line x1="4" y1="4" x2="9" y2="9"></line></symbol>
+  </svg>
   <div class="app">
     <header class="topbar">
       <div class="path-breadcrumb" id="breadcrumb"></div>
@@ -28,7 +39,7 @@
           <div id="uploadPanel" class="upload-panel hidden">
             <div class="upload-panel-header">
               <button id="uploadClearBtn" title="Clear completed and failed uploads">Clear</button>
-              <button id="uploadExplorerBtn" title="Choose files"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#6ea8fe" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>Browse files</button>
+              <button id="uploadExplorerBtn" title="Choose files"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#6ea8fe" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;"><use href="#icon-folder"></use></svg>Browse files</button>
             </div>
             <div id="uploadList" class="upload-list">
               <div class="upload-empty" id="uploadEmpty">No uploads yet</div>
@@ -65,8 +76,8 @@
           <button class="tab-btn" data-tab="playlists">Playlists</button>
         </div>
         <div class="queue-toolbar" id="queueToolbar">
-          <button id="clearQueueBtn" title="Clear queue"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg>Clear</button>
-          <button id="shuffleQueueBtn" title="Shuffle queue"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;"><polyline points="16 3 21 3 21 8"></polyline><line x1="4" y1="20" x2="21" y2="3"></line><polyline points="21 16 21 21 16 21"></polyline><line x1="15" y1="15" x2="21" y2="21"></line><line x1="4" y1="4" x2="9" y2="9"></line></svg>Shuffle</button>
+          <button id="clearQueueBtn" title="Clear queue"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;"><use href="#icon-trash"></use></svg>Clear</button>
+          <button id="shuffleQueueBtn" title="Shuffle queue"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;"><use href="#icon-shuffle"></use></svg>Shuffle</button>
         </div>
         <div class="tab-panel" id="queuePanel"></div>
         <div class="tab-panel hidden" id="playlistsPanel"></div>
@@ -122,7 +133,7 @@
       </div>
       <div class="player-controls">
         <button id="shuffleBtn" title="Shuffle queue">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"></polyline><line x1="4" y1="20" x2="21" y2="3"></line><polyline points="21 16 21 21 16 21"></polyline><line x1="15" y1="15" x2="21" y2="21"></line><line x1="4" y1="4" x2="9" y2="9"></line></svg>
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-shuffle"></use></svg>
         </button>
         <button id="prevBtn" title="Previous">⏮</button>
         <button id="playPauseBtn" title="Play/Pause">▶</button>
@@ -139,8 +150,8 @@
           <svg id="muteIconOff" class="hidden" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="3 9 8 9 13 4 13 20 8 15 3 15 3 9"></polygon><line x1="16" y1="9" x2="22" y2="15"></line><line x1="22" y1="9" x2="16" y2="15"></line></svg>
         </button>
         <input type="range" id="volumeBar" min="0" max="100" value="100" title="Volume">
-        <button id="openFolderBtn" title="Open containing folder"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg></button>
-        <button id="deleteTrackBtn" title="Delete this track"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg></button>
+        <button id="openFolderBtn" title="Open containing folder"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-folder"></use></svg></button>
+        <button id="deleteTrackBtn" title="Delete this track"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-trash"></use></svg></button>
         <button id="closePlayerBtn" title="Close player">✕</button>
       </div>
       <audio id="audioEl"></audio>
@@ -219,12 +230,12 @@
         </div>
         <div class="meta-fields">
           <div class="meta-row" id="metaFilenameSingleRow"><label for="metaFilenameSingle">Filename</label><input type="text" id="metaFilenameSingle" placeholder="Filename" autocomplete="off"></div>
-          <div class="meta-row"><label for="metaField-title">Title</label><div class="meta-input-wrap"><input type="text" id="metaField-title" autocomplete="off"><button type="button" class="meta-field-arrow-btn" data-field="title" title="Show all values"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></button><datalist id="dl-title"></datalist></div></div>
-          <div class="meta-row"><label for="metaField-artist">Artist</label><div class="meta-input-wrap"><input type="text" id="metaField-artist" autocomplete="off"><button type="button" class="meta-field-arrow-btn" data-field="artist" title="Show all values"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></button><datalist id="dl-artist"></datalist></div></div>
-          <div class="meta-row"><label for="metaField-album">Album</label><div class="meta-input-wrap"><input type="text" id="metaField-album" autocomplete="off"><button type="button" class="meta-field-arrow-btn" data-field="album" title="Show all values"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></button><datalist id="dl-album"></datalist></div></div>
-          <div class="meta-row"><label for="metaField-year">Year</label><div class="meta-input-wrap"><input type="text" id="metaField-year" autocomplete="off"><button type="button" class="meta-field-arrow-btn" data-field="year" title="Show all values"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></button><datalist id="dl-year"></datalist></div></div>
-          <div class="meta-row"><label for="metaField-track">Track</label><div class="meta-input-wrap"><input type="text" id="metaField-track" autocomplete="off"><button type="button" class="meta-field-arrow-btn" data-field="track" title="Show all values"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></button><datalist id="dl-track"></datalist></div></div>
-          <div class="meta-row"><label for="metaField-disc">Disc</label><div class="meta-input-wrap"><input type="text" id="metaField-disc" autocomplete="off"><button type="button" class="meta-field-arrow-btn" data-field="disc" title="Show all values"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></button><datalist id="dl-disc"></datalist></div></div>
+          <div class="meta-row"><label for="metaField-title">Title</label><div class="meta-input-wrap"><input type="text" id="metaField-title" autocomplete="off"><button type="button" class="meta-field-arrow-btn" data-field="title" title="Show all values"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-chevron-down"></use></svg></button><datalist id="dl-title"></datalist></div></div>
+          <div class="meta-row"><label for="metaField-artist">Artist</label><div class="meta-input-wrap"><input type="text" id="metaField-artist" autocomplete="off"><button type="button" class="meta-field-arrow-btn" data-field="artist" title="Show all values"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-chevron-down"></use></svg></button><datalist id="dl-artist"></datalist></div></div>
+          <div class="meta-row"><label for="metaField-album">Album</label><div class="meta-input-wrap"><input type="text" id="metaField-album" autocomplete="off"><button type="button" class="meta-field-arrow-btn" data-field="album" title="Show all values"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-chevron-down"></use></svg></button><datalist id="dl-album"></datalist></div></div>
+          <div class="meta-row"><label for="metaField-year">Year</label><div class="meta-input-wrap"><input type="text" id="metaField-year" autocomplete="off"><button type="button" class="meta-field-arrow-btn" data-field="year" title="Show all values"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-chevron-down"></use></svg></button><datalist id="dl-year"></datalist></div></div>
+          <div class="meta-row"><label for="metaField-track">Track</label><div class="meta-input-wrap"><input type="text" id="metaField-track" autocomplete="off"><button type="button" class="meta-field-arrow-btn" data-field="track" title="Show all values"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-chevron-down"></use></svg></button><datalist id="dl-track"></datalist></div></div>
+          <div class="meta-row"><label for="metaField-disc">Disc</label><div class="meta-input-wrap"><input type="text" id="metaField-disc" autocomplete="off"><button type="button" class="meta-field-arrow-btn" data-field="disc" title="Show all values"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-chevron-down"></use></svg></button><datalist id="dl-disc"></datalist></div></div>
         </div>
       </div>
       <div class="meta-row meta-row-lyrics" id="metaLyricsRow">

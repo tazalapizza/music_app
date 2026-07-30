@@ -8,9 +8,46 @@ let shuffled = false;
 let queueIndex = -1;
 let playlists = {};
 let loopMode = 'off'; // 'off' | 'all' | 'one'
+let playerArtTrackPath = null; // guards against a slow-loading image resolving after the track changed again
 const speeds = [0.5, 1, 1.5, 2];
 let speedIndex = 1;
-const metaCache = {}; // path -> {title, artist, duration, hasArt}
+// Capped LRU for track metadata (title/artist/duration/etc). Wrapped in a
+// Proxy so every existing call site (metaCache[path], delete metaCache[path])
+// keeps working unchanged, while eviction happens underneath via a Map that
+// re-orders itself on every read/write - Maps preserve insertion order, so
+// the first key is always the least-recently-used one.
+const METACACHE_MAX = 20000;
+function createLruCache(max) {
+  const store = new Map();
+  const touch = (key) => {
+    const val = store.get(key);
+    store.delete(key);
+    store.set(key, val);
+    return val;
+  };
+  return new Proxy({}, {
+    get(_, key) {
+      if (typeof key !== 'string') return undefined;
+      return store.has(key) ? touch(key) : undefined;
+    },
+    set(_, key, value) {
+      if (typeof key === 'string') {
+        store.delete(key);
+        store.set(key, value);
+        if (store.size > max) store.delete(store.keys().next().value);
+      }
+      return true;
+    },
+    deleteProperty(_, key) {
+      if (typeof key === 'string') store.delete(key);
+      return true;
+    },
+    has(_, key) {
+      return typeof key === 'string' && store.has(key);
+    }
+  });
+}
+const metaCache = createLruCache(METACACHE_MAX); // path -> {title, artist, duration, hasArt}
 
 // ---------- Shared icons (flat, monochrome to match the app's style; folder uses the accent blue) ----------
 const TRASH_ICON_SVG = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg>`;
@@ -160,6 +197,23 @@ async function getMeta(path) {
   }
 }
 
+// Fetches metadata for many paths in one request instead of one request per
+// track. Populates metaCache so subsequent getMeta() calls for these paths
+// (e.g. from buildFileRow) resolve instantly from cache.
+async function prefetchMeta(paths) {
+  const missing = [...new Set(paths)].filter(p => !metaCache[p]);
+  if (missing.length === 0) return;
+  try {
+    const { meta } = await api('/api/meta/batch', { method: 'POST', body: JSON.stringify({ paths: missing }), headers: { 'Content-Type': 'application/json' } });
+    for (const p of missing) {
+      if (meta[p]) metaCache[p] = meta[p];
+    }
+  } catch {
+    // Fall through silently - individual getMeta() calls in buildFileRow will
+    // still fetch (and cache) whatever this batch call failed to retrieve.
+  }
+}
+
 // ---------- Browsing ----------
 async function browse(relPath, opts = {}) {
   currentPath = relPath;
@@ -273,7 +327,7 @@ function renderLibraryBanner(type, data) {
     const albumCards = (data.albums || []).map(a => `
       <div class="album-card" data-album="${a.name}">
         ${a.artPath
-          ? `<img class="album-card-art" src="/api/art?path=${encodeURIComponent(a.artPath)}" alt="">`
+          ? `<img class="album-card-art" loading="lazy" src="/api/art?path=${encodeURIComponent(a.artPath)}" alt="">`
           : `<div class="album-card-art">${MUSIC_NOTE_PLACEHOLDER}</div>`}
         <div class="album-card-name">${a.name}</div>
         <div class="album-card-year">${a.year || ''}</div>
@@ -438,6 +492,7 @@ function buildFileRow(item, opts = {}) {
         if (meta.hasArt) {
           const img = document.createElement('img');
           img.className = 'file-art';
+          img.loading = 'lazy';
           img.src = `/api/art?path=${encodeURIComponent(item.path)}`;
           img.onerror = () => { img.replaceWith(iconSpan); };
           iconSpan.replaceWith(img);
@@ -503,7 +558,7 @@ function updateSortIndicators() {
 async function applySort(items) {
   if (!sortColumn) return items;
   if (sortColumn === 'title' || sortColumn === 'artist' || sortColumn === 'album' || sortColumn === 'duration') {
-    await Promise.all(items.filter(i => i.isAudio).map(i => getMeta(i.path)));
+    await prefetchMeta(items.filter(i => i.isAudio).map(i => i.path));
   }
   const dir = sortDir === 'asc' ? 1 : -1;
   const valueOf = (item) => {
@@ -542,18 +597,70 @@ async function applySort(items) {
   });
 }
 
+// Appends `items` into `container` in chunks instead of building every row's
+// DOM at once - important on mobile where a folder/queue/search result can
+// have thousands of entries. Metadata is still prefetched and the full list
+// still sorted beforehand (see callers); only the DOM node creation itself is
+// deferred, chunk by chunk, as a sentinel element scrolls into view.
+const PAGINATION_CHUNK_SIZE = 100;
+const paginationObservers = new WeakMap(); // container -> active IntersectionObserver
+const paginationLoaders = new WeakMap(); // container -> function(targetIndex) that force-loads chunks up to and including targetIndex
+function renderPaginated(container, items, buildRow, chunkSize = PAGINATION_CHUNK_SIZE) {
+  const prevObserver = paginationObservers.get(container);
+  if (prevObserver) { prevObserver.disconnect(); paginationObservers.delete(container); }
+  let nextIndex = 0;
+  let observer = null;
+  const sentinel = document.createElement('div');
+  sentinel.className = 'pagination-sentinel';
+  container.appendChild(sentinel); // always present as the insertBefore reference node, even for a single-chunk list
+
+  function appendChunk() {
+    const end = Math.min(nextIndex + chunkSize, items.length);
+    const frag = document.createDocumentFragment();
+    for (; nextIndex < end; nextIndex++) {
+      frag.appendChild(buildRow(items[nextIndex], nextIndex));
+    }
+    container.insertBefore(frag, sentinel);
+    if (nextIndex >= items.length) {
+      if (observer) { observer.disconnect(); if (paginationObservers.get(container) === observer) paginationObservers.delete(container); }
+      sentinel.remove();
+      paginationLoaders.delete(container);
+    }
+  }
+
+  // Lets a caller (e.g. "scroll to the playing track") force-render enough
+  // chunks to reach a specific item index immediately, rather than waiting
+  // for the user to scroll the sentinel into view.
+  paginationLoaders.set(container, (targetIndex) => {
+    while (nextIndex <= targetIndex && nextIndex < items.length) appendChunk();
+  });
+
+  if (items.length > chunkSize) {
+    observer = new IntersectionObserver((entries) => {
+      if (entries[0].isIntersecting) appendChunk();
+    }, { root: container, rootMargin: '400px' });
+    observer.observe(sentinel);
+    paginationObservers.set(container, observer);
+    appendChunk();
+  } else {
+    appendChunk(); // single chunk covers everything; sentinel removes itself immediately
+  }
+}
+
 async function renderFileList(items) {
   clearSelection();
   lastFetchedItems = items;
   lastFetchedIsSearch = false;
   fileListWrap.classList.remove('album-view');
   const filtered = applyHideNonMusicFilter(items);
+  // Every row displays title/artist/album/duration via getMeta regardless of
+  // sort column, so prefetch in one batch call rather than letting each row
+  // fire its own /api/meta request.
+  await prefetchMeta(filtered.filter(i => i.isAudio).map(i => i.path));
   const sorted = await applySort(filtered);
   lastRenderedItems = sorted;
   fileList.innerHTML = '';
-  for (const item of sorted) {
-    fileList.appendChild(buildFileRow(item));
-  }
+  renderPaginated(fileList, sorted, (item) => buildFileRow(item));
   updateSortIndicators();
 }
 
@@ -599,6 +706,8 @@ async function renderSearchResults(items) {
   const isArtistView = libraryView && libraryView.type === 'artist';
   fileListWrap.classList.toggle('album-view', !!isAlbumView);
 
+  await prefetchMeta(filtered.filter(i => i.isAudio).map(i => i.path));
+
   if (isAlbumView) {
     // Group by disc first - sorting (explicit or default) only ever reorders
     // tracks WITHIN a disc, never across discs.
@@ -625,9 +734,7 @@ async function renderSearchResults(items) {
       ? await applySort(filtered)
       : (isArtistView ? sortByAlbumDiscTrackDefault(filtered) : [...filtered].sort((a, b) => (a.isDir === b.isDir) ? 0 : (a.isDir ? -1 : 1)));
     lastRenderedItems = sorted;
-    for (const item of sorted) {
-      fileList.appendChild(buildFileRow(item, { showOpenFolder: true, showFullPath: item.isDir }));
-    }
+    renderPaginated(fileList, sorted, (item) => buildFileRow(item, { showOpenFolder: true, showFullPath: item.isDir }));
   }
 
   if (searchHasMore) {
@@ -821,7 +928,8 @@ const playerBarEl = document.getElementById('playerBar');
 function showPlayerBar() { playerBarEl.classList.remove('hidden'); document.querySelector('.lyrics-box-wrap').classList.remove('hidden'); }
 function hidePlayerBar() {
   playerBarEl.classList.add('hidden');
-  
+  playerArtTrackPath = null; // invalidate any in-flight updatePlayerArt fetch for the track that was playing
+
   // Fade out the global background
   document.documentElement.style.setProperty('--blur-opacity', '0');
   
@@ -892,7 +1000,7 @@ function playCurrent() {
     applyReplayGain(meta.replayGainDb);
   });
   document.getElementById('playPauseBtn').textContent = '⏸';
-  renderQueue();
+  updateQueuePlayingIndicator();
   const playingEl = queuePanel.querySelector('.queue-item.playing');
   if (playingEl) playingEl.scrollIntoView({ block: 'start', behavior: 'smooth' });
 }
@@ -1025,6 +1133,7 @@ function applyBlurColors(colors) {
 }
 
 function updatePlayerArt(trackPath) {
+  playerArtTrackPath = trackPath;
   const artImg = document.getElementById('playerArt');
   const artIcon = document.getElementById('playerArtIcon');
   const artUrl = `/api/art?path=${encodeURIComponent(trackPath)}`;
@@ -1040,20 +1149,24 @@ function updatePlayerArt(trackPath) {
   const sampleImg = new Image();
 
   artImg.onload = () => {
+    if (playerArtTrackPath !== trackPath) return; // a newer track started before this resolved
     artIcon.classList.add('hidden');
     artImg.classList.remove('hidden');
   };
 
   sampleImg.onload = () => {
+    if (playerArtTrackPath !== trackPath) return; // a newer track started before this resolved
     const colors = extractDominantColors(sampleImg, 4);
     applyBlurColors(colors);
   };
 
   sampleImg.onerror = () => {
+    if (playerArtTrackPath !== trackPath) return;
     document.documentElement.style.setProperty('--blur-opacity', '0');
   };
 
   artImg.onerror = () => {
+    if (playerArtTrackPath !== trackPath) return;
     artImg.classList.add('hidden');
     artIcon.classList.remove('hidden');
     document.documentElement.style.setProperty('--blur-opacity', '0');
@@ -1236,6 +1349,7 @@ function toggleShuffle() {
   }
   updateShuffleBtnState();
   renderQueue();
+  scrollToPlayingQueueRow();
 }
 document.getElementById('shuffleBtn').addEventListener('click', toggleShuffle);
 document.getElementById('shuffleQueueBtn').addEventListener('click', toggleShuffle);
@@ -1323,10 +1437,19 @@ document.getElementById('deleteTrackBtn').addEventListener('click', async () => 
   if (queueIndex < 0 || queueIndex >= queue.length) return;
   const track = queue[queueIndex];
   if (!confirmAction(`Delete "${track.name}"? This cannot be undone.`)) return;
+  // Stop playback and detach the source *before* the delete request goes out.
+  // Otherwise, deleting a file that's actively streaming can make the
+  // browser fire 'ended' while the API call is still in flight, which
+  // races playNext() against this handler's own queueIndex/queue updates
+  // below and can leave queueIndex pointing at the wrong track.
+  audioEl.pause();
+  audioEl.removeAttribute('src');
+  audioEl.load();
   await api('/api/delete', {
     method: 'DELETE', headers: {'Content-Type':'application/json'},
     body: JSON.stringify({ path: track.path })
   });
+  const removedRow = [...queuePanel.querySelectorAll('.queue-item')].find(row => Number(row.dataset.index) === queueIndex);
   removeFromQueueAt(queueIndex);
   if (queueIndex >= queue.length) queueIndex = queue.length - 1;
   if (queueIndex >= 0) {
@@ -1336,7 +1459,7 @@ document.getElementById('deleteTrackBtn').addEventListener('click', async () => 
     document.getElementById('trackName').querySelector('span').textContent = '';
     document.getElementById('trackPath').querySelector('span').textContent = '';
   }
-  renderQueue();
+  if (removedRow) removeQueueRowAt(removedRow); else renderQueue();
   const trackFolder = track.path.includes('/') ? track.path.slice(0, track.path.lastIndexOf('/')) : '';
   if (currentPath === trackFolder) {
     browse(currentPath, { keepSort: true });
@@ -1345,9 +1468,150 @@ document.getElementById('deleteTrackBtn').addEventListener('click', async () => 
 
 // ---------- Queue ----------
 let dragSrcIndex = null;
+let dragSrcRow = null;
 let playlistDragSrcIndex = null;
 let playlistDragName = null;
 let expandedPlaylists = new Set();
+
+function buildQueueRow(track, i) {
+  const div = document.createElement('div');
+  div.className = 'queue-item' + (i === queueIndex ? ' playing' : '');
+  div.draggable = true;
+  div.dataset.index = i;
+  div.innerHTML = `<span class="drag-handle">⠿</span><span>${track.name}</span><span class="remove-btn">✕</span>`;
+  // Handlers read the row's *current* dataset.index rather than capturing `i`
+  // in a closure. That way, removing one row from the middle of the queue
+  // only requires updating dataset.index on the rows after it (see
+  // removeQueueRowAt) instead of rebuilding every row's listeners.
+  div.addEventListener('click', () => {
+    const idx = Number(div.dataset.index);
+    if (idx === queueIndex) return;
+    queueIndex = idx;
+    playCurrent();
+  });
+  div.querySelector('.remove-btn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const idx = Number(div.dataset.index);
+    const wasPlayingThisRow = idx === queueIndex;
+    removeFromQueueAt(idx);
+    if (idx < queueIndex) queueIndex--;
+    if (queue.length === 0) {
+      audioEl.pause();
+      queueIndex = -1;
+      hidePlayerBar();
+      document.getElementById('trackName').querySelector('span').textContent = '';
+      document.getElementById('trackPath').querySelector('span').textContent = '';
+    } else if (wasPlayingThisRow) {
+      // The track after the removed one has shifted into this same index -
+      // play that instead of stopping, unless we removed the last row, in
+      // which case there's nothing after it left to play.
+      if (queueIndex >= queue.length) queueIndex = queue.length - 1;
+      playCurrent();
+    }
+    removeQueueRowAt(div);
+  });
+  div.addEventListener('dragstart', (e) => {
+    dragSrcIndex = Number(div.dataset.index);
+    dragSrcRow = div;
+    div.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+  });
+  div.addEventListener('dragend', () => {
+    div.classList.remove('dragging');
+    queuePanel.querySelectorAll('.queue-item').forEach(el => el.classList.remove('drag-over'));
+    dragSrcIndex = null;
+    dragSrcRow = null;
+  });
+  div.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    div.classList.add('drag-over');
+  });
+  div.addEventListener('dragleave', () => div.classList.remove('drag-over'));
+  div.addEventListener('drop', (e) => {
+    e.preventDefault();
+    div.classList.remove('drag-over');
+    const destIndex = Number(div.dataset.index);
+    const srcRow = dragSrcRow;
+    if (dragSrcIndex === null || dragSrcIndex === destIndex || !srcRow) return;
+    const currentTrack = queueIndex >= 0 ? queue[queueIndex] : null;
+    const [moved] = queue.splice(dragSrcIndex, 1);
+    queue.splice(destIndex, 0, moved);
+    if (currentTrack) queueIndex = queue.indexOf(currentTrack);
+    syncOriginalQueueIfUnshuffled();
+    dragSrcIndex = null;
+    dragSrcRow = null;
+    reorderQueueRow(srcRow, destIndex);
+  });
+  return div;
+}
+
+// Moves one row's DOM node (the row that was actually dragged) to sit at
+// destIndex, without rebuilding the rest of the list, and fixes up
+// dataset.index for every row afterward.
+function reorderQueueRow(div, destIndex) {
+  const rows = [...queuePanel.querySelectorAll('.queue-item')];
+  if (!rows.includes(div)) { renderQueue(); return; } // dragged row wasn't rendered (paginated out) - safe fallback
+  div.remove();
+  const refRow = rows.filter(r => r !== div)[destIndex] || null;
+  queuePanel.insertBefore(div, refRow || queuePanel.querySelector('.pagination-sentinel'));
+  reindexQueueRows();
+  updateQueuePlayingIndicator();
+}
+
+// Removes a single row's DOM node and re-indexes every row that came after
+// it, instead of rebuilding the whole queue panel.
+function removeQueueRowAt(div) {
+  if (queue.length === 0) { renderQueue(); return; }
+  div.remove();
+  reindexQueueRows();
+  updateQueuePlayingIndicator();
+}
+
+// Re-derives dataset.index for every currently-rendered row from its DOM
+// position, so handlers (which read dataset.index at event time) stay
+// correct after an insert/remove/reorder without needing new listeners.
+function reindexQueueRows() {
+  [...queuePanel.querySelectorAll('.queue-item')].forEach((row, i) => {
+    row.dataset.index = i;
+  });
+}
+
+// Moves the '.playing' class to whichever row (if any) currently rendered
+// corresponds to queueIndex, without touching any other row's DOM.
+function updateQueuePlayingIndicator() {
+  queuePanel.querySelectorAll('.queue-item.playing').forEach(el => el.classList.remove('playing'));
+  const playingRow = [...queuePanel.querySelectorAll('.queue-item')].find(row => Number(row.dataset.index) === queueIndex);
+  if (playingRow) playingRow.classList.add('playing');
+}
+
+// Scrolls the queue panel to the currently-playing row. If that row hasn't
+// been rendered yet (still behind the pagination sentinel), force-loads
+// chunks up to it first via the loader renderPaginated registered for this
+// container, so the row exists before we try to scroll to it.
+function scrollToPlayingQueueRow() {
+  if (queueIndex < 0) return;
+  const loadUntil = paginationLoaders.get(queuePanel);
+  if (loadUntil) loadUntil(queueIndex);
+  const playingRow = [...queuePanel.querySelectorAll('.queue-item')].find(row => Number(row.dataset.index) === queueIndex);
+  if (playingRow) playingRow.scrollIntoView({ block: 'start', behavior: 'smooth' });
+}
+
+// Appends newly-queued tracks' rows without touching existing ones. Falls
+// back to a full renderQueue() if the queue wasn't fully rendered yet
+// (pagination still in progress) or was empty (no pagination state to
+// append onto), since dataset.index continuity can't be assumed otherwise.
+function appendQueueRows(newTracks) {
+  if (newTracks.length === 0) return;
+  const alreadyRendered = queuePanel.querySelectorAll('.queue-item').length;
+  const stillPaginating = !!queuePanel.querySelector('.pagination-sentinel');
+  if (alreadyRendered === 0 || stillPaginating) { renderQueue(); return; }
+  const startIndex = queue.length - newTracks.length;
+  const frag = document.createDocumentFragment();
+  newTracks.forEach((track, i) => {
+    frag.appendChild(buildQueueRow(track, startIndex + i));
+  });
+  queuePanel.appendChild(frag);
+}
 
 function renderQueue() {
   queuePanel.innerHTML = '';
@@ -1355,72 +1619,27 @@ function renderQueue() {
     queuePanel.innerHTML = '<div style="padding:10px;color:#77777d;font-size:13px;">Queue is empty</div>';
     return;
   }
-  queue.forEach((track, i) => {
-    const div = document.createElement('div');
-    div.className = 'queue-item' + (i === queueIndex ? ' playing' : '');
-    div.draggable = true;
-    div.dataset.index = i;
-    div.innerHTML = `<span class="drag-handle">⠿</span><span>${track.name}</span><span class="remove-btn" data-i="${i}">✕</span>`;
-    div.addEventListener('click', () => {
-      if (i === queueIndex) return;
-      queueIndex = i;
-      playCurrent();
-    });
-    div.querySelector('.remove-btn').addEventListener('click', (e) => {
-      e.stopPropagation();
-      removeFromQueueAt(i);
-      if (i < queueIndex) queueIndex--;
-      else if (i === queueIndex) { audioEl.pause(); queueIndex = -1; }
-      if (queue.length === 0) {
-        hidePlayerBar();
-        document.getElementById('trackName').querySelector('span').textContent = '';
-        document.getElementById('trackPath').querySelector('span').textContent = '';
-      }
-      renderQueue();
-    });
-    div.addEventListener('dragstart', (e) => {
-      dragSrcIndex = i;
-      div.classList.add('dragging');
-      e.dataTransfer.effectAllowed = 'move';
-    });
-    div.addEventListener('dragend', () => {
-      div.classList.remove('dragging');
-      queuePanel.querySelectorAll('.queue-item').forEach(el => el.classList.remove('drag-over'));
-    });
-    div.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      div.classList.add('drag-over');
-    });
-    div.addEventListener('dragleave', () => div.classList.remove('drag-over'));
-    div.addEventListener('drop', (e) => {
-      e.preventDefault();
-      div.classList.remove('drag-over');
-      const destIndex = i;
-      if (dragSrcIndex === null || dragSrcIndex === destIndex) return;
-      const currentTrack = queueIndex >= 0 ? queue[queueIndex] : null;
-      const [moved] = queue.splice(dragSrcIndex, 1);
-      queue.splice(destIndex, 0, moved);
-      if (currentTrack) queueIndex = queue.indexOf(currentTrack);
-      syncOriginalQueueIfUnshuffled();
-      dragSrcIndex = null;
-      renderQueue();
-    });
-    queuePanel.appendChild(div);
-  });
+  // Only the first PAGINATION_CHUNK_SIZE rows render up front; the rest render
+  // as the user scrolls the queue panel (see renderPaginated). Indices are
+  // still assigned against the full `queue` array either way, since drag/drop
+  // and remove-at-index need to stay correct regardless of what's rendered.
+  renderPaginated(queuePanel, queue, buildQueueRow);
 }
 
 async function addToQueue(item) {
+  const before = queue.length;
   if (item.isDir) {
     const { files } = await api(`/api/expand?path=${encodeURIComponent(item.path)}`);
     files.forEach(f => pushToQueue({ path: f, name: fileNameOf(f) }));
   } else {
     pushToQueue({ path: item.path, name: item.name });
   }
+  const newTracks = queue.slice(before);
+  appendQueueRows(newTracks);
   if (queueIndex === -1 && queue.length > 0) {
     queueIndex = 0;
     playCurrent();
   }
-  renderQueue();
 }
 
 // ---------- Playlists ----------
@@ -1462,14 +1681,19 @@ function renderPlaylists() {
     header.addEventListener('click', () => {
       const nowOpen = tracksDiv.style.display === 'none';
       tracksDiv.style.display = nowOpen ? 'block' : 'none';
-      if (nowOpen) expandedPlaylists.add(name);
-      else expandedPlaylists.delete(name);
+      if (nowOpen) {
+        expandedPlaylists.add(name);
+        renderPlaylistTracks(name, tracks, tracksDiv);
+      } else {
+        expandedPlaylists.delete(name);
+      }
     });
 
     function playWholePlaylist() {
-      queue = tracks.map(t => ({ path: t, name: fileNameOf(t) }));
+      resetQueue(tracks.map(t => ({ path: t, name: fileNameOf(t) })));
       queueIndex = 0;
       playCurrent();
+      renderQueue();
     }
     header.querySelector('.playlist-play-btn').addEventListener('click', (e) => {
       e.stopPropagation();
@@ -1481,68 +1705,87 @@ function renderPlaylists() {
       showPlaylistContextMenu(e.clientX, e.clientY, name, tracks);
     });
 
-    tracks.forEach((t, ti) => {
-      const item = document.createElement('div');
-      item.className = 'playlist-item';
-      item.draggable = true;
-      item.dataset.index = ti;
-      item.innerHTML = `<span class="drag-handle">⠿</span><span>${fileNameOf(t)}</span><span class="remove-btn">✕</span>`;
-      item.addEventListener('click', () => {
-        resetQueue(tracks.map(tt => ({ path: tt, name: fileNameOf(tt) })));
-        queueIndex = tracks.indexOf(t);
-        playCurrent();
-      });
-      item.querySelector('.remove-btn').addEventListener('click', async (e) => {
-        e.stopPropagation();
-        await api(`/api/playlists/${encodeURIComponent(name)}/remove`, {
-          method: 'POST', headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({ file: t })
-        });
-        loadPlaylists();
-      });
-      item.addEventListener('dragstart', (e) => {
-        e.stopPropagation();
-        playlistDragSrcIndex = ti;
-        playlistDragName = name;
-        item.classList.add('dragging');
-        e.dataTransfer.effectAllowed = 'move';
-      });
-      item.addEventListener('dragend', () => {
-        item.classList.remove('dragging');
-        tracksDiv.querySelectorAll('.playlist-item').forEach(el => el.classList.remove('drag-over'));
-      });
-      item.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        if (playlistDragName === name) item.classList.add('drag-over');
-      });
-      item.addEventListener('dragleave', () => item.classList.remove('drag-over'));
-      item.addEventListener('drop', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        item.classList.remove('drag-over');
-        if (playlistDragName !== name || playlistDragSrcIndex === null || playlistDragSrcIndex === ti) {
-          playlistDragSrcIndex = null;
-          playlistDragName = null;
-          return;
-        }
-        const fromIdx = playlistDragSrcIndex;
-        const toIdx = ti;
-        const [moved] = tracks.splice(fromIdx, 1);
-        tracks.splice(toIdx, 0, moved);
-        playlistDragSrcIndex = null;
-        playlistDragName = null;
-        renderPlaylists();
-        api(`/api/playlists/${encodeURIComponent(name)}/reorder`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ from: fromIdx, to: toIdx })
-        }).catch(() => loadPlaylists());
-      });
-      tracksDiv.appendChild(item);
-    });
+    // Rows are only built when the playlist is actually expanded (and
+    // paginated within that, for large playlists) - a collapsed playlist
+    // costs nothing beyond its header, instead of building every track's DOM
+    // and listeners up front just to hide them.
+    if (expandedPlaylists.has(name)) renderPlaylistTracks(name, tracks, tracksDiv);
 
     playlistsPanel.appendChild(header);
     playlistsPanel.appendChild(tracksDiv);
   });
+}
+
+function buildPlaylistRow(name, tracks, track, ti) {
+  const item = document.createElement('div');
+  item.className = 'playlist-item';
+  item.draggable = true;
+  item.dataset.index = ti;
+  item.innerHTML = `<span class="drag-handle">⠿</span><span>${fileNameOf(track)}</span><span class="remove-btn">✕</span>`;
+  // Handlers read the row's *current* dataset.index rather than capturing
+  // `ti` in a closure, same reasoning as the queue's buildQueueRow - so
+  // pagination/removal doesn't require rebuilding every row's listeners.
+  item.addEventListener('click', () => {
+    const idx = Number(item.dataset.index);
+    resetQueue(tracks.map(tt => ({ path: tt, name: fileNameOf(tt) })));
+    queueIndex = idx;
+    playCurrent();
+  });
+  item.querySelector('.remove-btn').addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const idx = Number(item.dataset.index);
+    await api(`/api/playlists/${encodeURIComponent(name)}/remove`, {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ file: tracks[idx] })
+    });
+    loadPlaylists();
+  });
+  item.addEventListener('dragstart', (e) => {
+    e.stopPropagation();
+    playlistDragSrcIndex = Number(item.dataset.index);
+    playlistDragName = name;
+    item.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+  });
+  item.addEventListener('dragend', () => {
+    item.classList.remove('dragging');
+    item.parentElement && item.parentElement.querySelectorAll('.playlist-item').forEach(el => el.classList.remove('drag-over'));
+    playlistDragSrcIndex = null;
+    playlistDragName = null;
+  });
+  item.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    if (playlistDragName === name) item.classList.add('drag-over');
+  });
+  item.addEventListener('dragleave', () => item.classList.remove('drag-over'));
+  item.addEventListener('drop', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    item.classList.remove('drag-over');
+    const ti2 = Number(item.dataset.index);
+    if (playlistDragName !== name || playlistDragSrcIndex === null || playlistDragSrcIndex === ti2) {
+      playlistDragSrcIndex = null;
+      playlistDragName = null;
+      return;
+    }
+    const fromIdx = playlistDragSrcIndex;
+    const toIdx = ti2;
+    const [moved] = tracks.splice(fromIdx, 1);
+    tracks.splice(toIdx, 0, moved);
+    playlistDragSrcIndex = null;
+    playlistDragName = null;
+    renderPlaylists();
+    api(`/api/playlists/${encodeURIComponent(name)}/reorder`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: fromIdx, to: toIdx })
+    }).catch(() => loadPlaylists());
+  });
+  return item;
+}
+
+function renderPlaylistTracks(name, tracks, tracksDiv) {
+  tracksDiv.innerHTML = '';
+  renderPaginated(tracksDiv, tracks, (track, ti) => buildPlaylistRow(name, tracks, track, ti));
 }
 
 async function addAllToPlaylist(name, items) {
@@ -1560,12 +1803,14 @@ async function addToPlaylist(name, item) {
 
 // ---- Playlist-level actions (right-click on a playlist in the sidebar) ----
 function addPlaylistTracksToQueue(tracks) {
+  const before = queue.length;
   tracks.forEach(t => pushToQueue({ path: t, name: fileNameOf(t) }));
+  const newTracks = queue.slice(before);
+  appendQueueRows(newTracks);
   if (queueIndex === -1 && queue.length > 0) {
     queueIndex = 0;
     playCurrent();
   }
-  renderQueue();
 }
 async function deletePlaylist(name) {
   if (!confirmAction(`Delete playlist "${name}"? This cannot be undone.`)) return;
