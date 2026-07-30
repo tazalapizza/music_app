@@ -373,6 +373,25 @@ app.get('/api/stream', async (req, res) => {
 // enough here - unlike artCache, which caps by byte size.
 const metaCache = new LRUCache({ max: 20000 }); // relPath -> { mtimeMs, data }
 
+// Many tracks in an album folder typically embed the exact same cover art.
+// Rather than each track's row fetching/parsing/serving that image
+// independently (same bytes, N separate requests), readMeta() also computes
+// a content hash of the embedded art, and the client groups tracks sharing a
+// hash onto one shared /api/art-by-hash URL - browsers dedupe repeated
+// requests to the same URL, so the image loads once instead of N times.
+//
+// artHashIndex is just a *hint* (hash -> a path last known to carry that
+// art), not a source of truth: it's rebuilt opportunistically as files are
+// read, capped in size, and never persisted. If the specific file it points
+// to is later deleted/moved/retagged, /api/art-by-hash re-resolves using the
+// fallback path the client sends alongside the hash (see that endpoint) -
+// so a stale hint degrades to "one extra file read", never a broken image.
+const artHashIndex = new LRUCache({ max: 20000 }); // hash -> relPath
+
+function hashArtBuffer(buf) {
+  return crypto.createHash('sha1').update(buf).digest('hex');
+}
+
 async function readMeta(rel) {
   const full = safeResolve(rel);
   const stat = await fsp.stat(full);
@@ -383,16 +402,23 @@ async function readMeta(rel) {
   try {
     const parsed = await mm.parseFile(full, { duration: true, skipCovers: false });
     const rg = parsed.common.replaygain_track_gain;
+    const pic = parsed.common.picture && parsed.common.picture[0];
+    let artHash = null;
+    if (pic && pic.data && pic.data.length) {
+      artHash = hashArtBuffer(pic.data);
+      artHashIndex.set(artHash, rel); // opportunistic hint, see comment above artHashIndex
+    }
     data = {
       title: parsed.common.title || path.basename(rel, path.extname(rel)),
       artist: parsed.common.artist || parsed.common.albumartist || '',
       album: parsed.common.album || '',
       duration: parsed.format.duration || null,
       hasArt: !!(parsed.common.picture && parsed.common.picture.length),
+      artHash,
       replayGainDb: (rg && typeof rg.dB === 'number') ? rg.dB : null
     };
   } catch {
-    data = { title: path.basename(rel, path.extname(rel)), artist: '', album: '', duration: null, hasArt: false, replayGainDb: null };
+    data = { title: path.basename(rel, path.extname(rel)), artist: '', album: '', duration: null, hasArt: false, artHash: null, replayGainDb: null };
   }
   metaCache.set(rel, { mtimeMs: stat.mtimeMs, data });
   return data;
@@ -774,26 +800,84 @@ const artCache = new LRUCache({
   sizeCalculation: (entry) => entry.data.length,
 });
 
+// Reads (and caches) the embedded art for a given relative path. Returns
+// null if the file is missing/unreadable or has no embedded art, rather than
+// throwing, so callers (both /api/art and /api/art-by-hash) can fall back
+// to another candidate path instead of failing outright.
+async function readArtEntry(rel) {
+  const full = safeResolve(rel);
+  const stat = await fsp.stat(full);
+  const cacheKey = `${rel}:${stat.mtimeMs}`;
+  let entry = artCache.get(cacheKey);
+  if (!entry) {
+    const mm = await import('music-metadata');
+    const parsed = await mm.parseFile(full, { duration: false, skipCovers: false });
+    const pic = parsed.common.picture && parsed.common.picture[0];
+    if (!pic) { entry = { missing: true, data: Buffer.alloc(0) }; }
+    else { entry = { format: pic.format, data: pic.data }; }
+    artCache.set(cacheKey, entry);
+  }
+  return entry.missing ? null : entry;
+}
+
 app.get('/api/art', async (req, res) => {
   try {
     const rel = req.query.path;
-    const full = safeResolve(rel);
-    const stat = await fsp.stat(full);
-    const cacheKey = `${rel}:${stat.mtimeMs}`;
-    let entry = artCache.get(cacheKey);
-    if (!entry) {
-      const mm = await import('music-metadata');
-      const parsed = await mm.parseFile(full, { duration: false, skipCovers: false });
-      const pic = parsed.common.picture && parsed.common.picture[0];
-      if (!pic) { artCache.set(cacheKey, { missing: true, data: Buffer.alloc(0) }); return res.status(404).end(); }
-      entry = { format: pic.format, data: pic.data };
-      artCache.set(cacheKey, entry);
-    }
-    if (entry.missing) return res.status(404).end();
+    const entry = await readArtEntry(rel);
+    if (!entry) return res.status(404).end();
     res.writeHead(200, { 'Content-Type': entry.format, 'Cache-Control': 'public, max-age=86400' });
     res.end(entry.data);
   } catch (err) {
     logIssue(`GET /api/art?path=${req.query.path || ''} failed: ${err.message}`);
+    res.status(404).end();
+  }
+});
+
+// Serves art by content hash rather than by any one track's path, so a group
+// of tracks that share identical embedded art can all point at the same URL
+// and let the browser fetch/cache it once instead of once per track.
+//
+// Edge case this exists to handle: the path artHashIndex has on file for
+// this hash may no longer be valid (deleted, moved, retagged since). So:
+//   1. Try the hinted path from artHashIndex, but verify its art still
+//      actually hashes to what was asked for (catches silent retagging,
+//      not just deletion).
+//   2. If that fails, try the client-supplied `fallback` path - the client
+//      always sends the path of some track it currently knows carries this
+//      art, from its own just-fetched batch metadata, as a safety net.
+//   3. If both fail, 404 - the client's <img onerror> already falls back to
+//      the generic note icon, same as a normal missing-art case today.
+// Either fallback path also means one extra file read at worst, never a
+// broken image just because the original hinted file is gone.
+app.get('/api/art-by-hash', async (req, res) => {
+  try {
+    const hash = req.query.hash;
+    const fallbackPath = req.query.fallback;
+    if (!hash) return res.status(400).end();
+
+    const hinted = artHashIndex.get(hash);
+    if (hinted) {
+      try {
+        const entry = await readArtEntry(hinted);
+        if (entry && hashArtBuffer(entry.data) === hash) {
+          res.writeHead(200, { 'Content-Type': entry.format, 'Cache-Control': 'public, max-age=86400' });
+          return res.end(entry.data);
+        }
+      } catch {} // hinted path is gone/unreadable - fall through to fallbackPath
+    }
+
+    if (fallbackPath) {
+      const entry = await readArtEntry(fallbackPath);
+      if (entry && hashArtBuffer(entry.data) === hash) {
+        artHashIndex.set(hash, fallbackPath); // refresh the hint so future requests skip straight to a working path
+        res.writeHead(200, { 'Content-Type': entry.format, 'Cache-Control': 'public, max-age=86400' });
+        return res.end(entry.data);
+      }
+    }
+
+    res.status(404).end();
+  } catch (err) {
+    logIssue(`GET /api/art-by-hash?hash=${req.query.hash || ''} failed: ${err.message}`);
     res.status(404).end();
   }
 });

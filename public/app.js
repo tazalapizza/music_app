@@ -62,7 +62,8 @@ const DEFAULT_SETTINGS = {
   skipDeleteConfirm: false,
   rememberVolume: false,
   hideNonMusic: false,
-  replayGainEnabled: true
+  replayGainEnabled: true,
+  maxItemsLoad: 100 // rows loaded per chunk in file lists/queue/playlists; 0 = unlimited (load everything at once)
 };
 let settings = { ...DEFAULT_SETTINGS };
 function loadSettings() {
@@ -493,7 +494,15 @@ function buildFileRow(item, opts = {}) {
           const img = document.createElement('img');
           img.className = 'file-art';
           img.loading = 'lazy';
-          img.src = `/api/art?path=${encodeURIComponent(item.path)}`;
+          // Tracks with identical embedded art share a hash, so pointing all
+          // of them at the same /api/art-by-hash URL lets the browser fetch
+          // it once instead of once per track. item.path is passed as the
+          // fallback candidate in case the server's hash->path hint is
+          // stale (see the endpoint's own comment for the full fallback
+          // chain) - it's a track we already know currently has this art.
+          img.src = meta.artHash
+            ? `/api/art-by-hash?hash=${encodeURIComponent(meta.artHash)}&fallback=${encodeURIComponent(item.path)}`
+            : `/api/art?path=${encodeURIComponent(item.path)}`;
           img.onerror = () => { img.replaceWith(iconSpan); };
           iconSpan.replaceWith(img);
         }
@@ -602,10 +611,15 @@ async function applySort(items) {
 // have thousands of entries. Metadata is still prefetched and the full list
 // still sorted beforehand (see callers); only the DOM node creation itself is
 // deferred, chunk by chunk, as a sentinel element scrolls into view.
-const PAGINATION_CHUNK_SIZE = 100;
+// Chunk size comes from settings.maxItemsLoad (configurable in Settings);
+// 0 means unlimited, which we treat as Infinity so every list of any size
+// takes the "one chunk covers everything" path with no observer at all.
+function currentChunkSize() {
+  return settings.maxItemsLoad > 0 ? settings.maxItemsLoad : Infinity;
+}
 const paginationObservers = new WeakMap(); // container -> active IntersectionObserver
 const paginationLoaders = new WeakMap(); // container -> function(targetIndex) that force-loads chunks up to and including targetIndex
-function renderPaginated(container, items, buildRow, chunkSize = PAGINATION_CHUNK_SIZE) {
+function renderPaginated(container, items, buildRow, chunkSize = currentChunkSize()) {
   const prevObserver = paginationObservers.get(container);
   if (prevObserver) { prevObserver.disconnect(); paginationObservers.delete(container); }
   let nextIndex = 0;
@@ -1005,10 +1019,18 @@ function playCurrent() {
   if (playingEl) playingEl.scrollIntoView({ block: 'start', behavior: 'smooth' });
 }
 
-// Extracts a handful of dominant colors from an image by downsampling it
-// onto a tiny canvas and clustering the resulting pixels into buckets.
-function extractDominantColors(imgEl, count = 4) {
-  const size = 32; // small sample grid is plenty for dominant color extraction
+// Finds the single most representative accent color in an image, by
+// downsampling it onto a tiny canvas and picking the most common color among
+// its more saturated pixels. A photo/cover that's mostly a soft, barely-
+// tinted background (cream, fog, pale gradients) can still have a real
+// accent color - a logo, a stripe, a face - that's small in area but is
+// clearly "the" color a person would name if asked. So rather than just
+// averaging every pixel (which a large bland background would dominate),
+// only pixels clearing a firm saturation bar are considered, with the bar
+// progressively relaxed until enough pixels qualify - falling back to every
+// pixel (unweighted) only if the art is genuinely near-grayscale throughout.
+function extractAccentColor(imgEl) {
+  const size = 32; // small sample grid is plenty for this
   const canvas = document.createElement('canvas');
   canvas.width = size;
   canvas.height = size;
@@ -1023,51 +1045,40 @@ function extractDominantColors(imgEl, count = 4) {
     return null;
   }
 
-  // Bucket colors into a coarse grid (4 bits per channel = 4096 buckets)
-  const buckets = new Map();
+  const pixels = [];
   for (let i = 0; i < data.length; i += 4) {
     const r = data[i], g = data[i + 1], b = data[i + 2], a = data[i + 3];
     if (a < 128) continue; // skip transparent pixels
-
-    // Skip near-black / near-white / very low-saturation pixels so we favor
-    // vivid, characterful colors over background padding
     const max = Math.max(r, g, b), min = Math.min(r, g, b);
     const lightness = (max + min) / 2;
+    if (lightness < 20 || lightness > 235) continue; // skip near-black/near-white
     const sat = max === min ? 0 : (max - min) / (255 - Math.abs(2 * lightness - 255));
-    if (lightness < 20 || lightness > 235) continue;
+    pixels.push({ r, g, b, sat });
+  }
+  if (!pixels.length) return null;
 
+  const MIN_QUALIFYING_PIXELS = Math.max(8, pixels.length * 0.03);
+  let pool = [];
+  for (const threshold of [0.18, 0.12, 0.07, 0]) {
+    pool = pixels.filter(p => p.sat >= threshold);
+    if (pool.length >= MIN_QUALIFYING_PIXELS || threshold === 0) break;
+  }
+  if (!pool.length) pool = pixels; // last resort: every pixel, unfiltered
+
+  // Bucket into a coarse 4-bit-per-channel grid and take the most common one.
+  const buckets = new Map();
+  for (const { r, g, b } of pool) {
     const key = `${r >> 4}_${g >> 4}_${b >> 4}`;
-    const bucket = buckets.get(key) || { r: 0, g: 0, b: 0, n: 0, weight: 0 };
-    const weight = 0.3 + sat; // favor saturated pixels a bit
-    bucket.r += r * weight;
-    bucket.g += g * weight;
-    bucket.b += b * weight;
-    bucket.n += 1;
-    bucket.weight += weight;
+    const bucket = buckets.get(key) || { r: 0, g: 0, b: 0, n: 0 };
+    bucket.r += r; bucket.g += g; bucket.b += b; bucket.n += 1;
     buckets.set(key, bucket);
   }
-
-  // Rank by accumulated saturation-weighted score (bucket.weight), not raw
-  // pixel count. A large but drab/muddy region (foggy background, dull
-  // fabric) would otherwise always win purely on size and get treated as
-  // "the" color, even when a smaller but genuinely vivid area is a much
-  // better representative of the art's character.
-  const sorted = [...buckets.values()]
-    .filter(b => b.n >= 2)
-    .sort((a, b) => b.weight - a.weight);
-
-  const source = sorted.length ? sorted : [...buckets.values()];
-  if (!source.length) return null;
-
-  const colors = [];
-  for (let i = 0; i < count; i++) {
-    const b = source[i % source.length];
-    const r = Math.round(b.r / b.weight);
-    const g = Math.round(b.g / b.weight);
-    const bl = Math.round(b.b / b.weight);
-    colors.push(`rgb(${r}, ${g}, ${bl})`);
+  let best = null;
+  for (const b of buckets.values()) {
+    if (!best || b.n > best.n) best = b;
   }
-  return colors;
+  if (!best) return null;
+  return `rgb(${Math.round(best.r / best.n)}, ${Math.round(best.g / best.n)}, ${Math.round(best.b / best.n)})`;
 }
 
 // Converts "rgb(r, g, b)" to an {h, s, l} triple (h in degrees, s/l in 0-1).
@@ -1106,30 +1117,321 @@ function makeAccentColor(rgbStr) {
   // faint enough that boosting it hard fabricates a color the art doesn't
   // actually read as. Bail out to a neutral white/grey instead of inventing
   // or amplifying a hue when there isn't a strong one to work with.
-  if (s < 0.22) return '#e8e8ea';
+  if (s < 0.14) return '#e8e8ea';
   // Too dark to read against the dark UI, and too light loses definition/feels washed out.
   l = Math.min(0.72, Math.max(0.5, l));
   // For art with a real, reasonably confident color, nudge saturation up just
-  // enough to read clearly as "a color" without overpowering a muted source.
-  s = Math.max(0.28, s);
+  // enough to read clearly as "a color" without overpowering a muted source,
+  // and cap it so a highly saturated source color doesn't come across too
+  // vivid/harsh as a thin UI accent.
+  s = Math.min(0.5, Math.max(0.28, s));
   return `hsl(${h.toFixed(1)}, ${(s * 100).toFixed(0)}%, ${(l * 100).toFixed(0)}%)`;
 }
 
-function applyBlurColors(colors) {
-  const root = document.documentElement.style;
-  if (!colors || !colors.length) {
-    root.setProperty('--blur-opacity', '0');
-    root.setProperty('--accent-color', '#e8e8ea');
+const blurGroup = document.querySelector('.player-blur-group');
+const blurWrap = document.querySelector('.player-blur-bg');
+const blurCanvas = document.getElementById('playerBlurCanvas');
+const blurCtx = blurCanvas ? blurCanvas.getContext('2d') : null;
+// How far the canvas overhangs each side of the visible panel, in CSS px.
+// Needs to be at least the blur radius (50px, see .player-blur-bg's filter)
+// so the blur kernel always has real painted pixels to sample from at the
+// panel's true edges, instead of mixing in empty transparent space there
+// and darkening the edge - which is what caused the "always a dark
+// fringe/black background" look before this fix.
+const BLUR_CANVAS_OVERSCAN = 70;
+
+// Deterministic PRNG so the same album art always reshuffles into the same
+// layout (no jarring reshuffle if this runs again for the same art).
+function mulberry32(seed) {
+  return function () {
+    seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Small stable hash from a string, used as the PRNG seed so the same image
+// URL always reshuffles into the same-looking mosaic instead of a different
+// random layout on every track change/redraw.
+function hashStringToSeed(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) h = (Math.imul(31, h) + str.charCodeAt(i)) | 0;
+  return h;
+}
+
+// "redmean" weighted Euclidean RGB distance - a cheap, well-known
+// approximation of perceptual color difference (weights green more heavily,
+// and red/blue depending on overall brightness, since human vision is more
+// sensitive to green). Used to order the mosaic's sampled colors so the
+// most visually distinct ones come first (see drawBlurBackground).
+function colorDistance(c1, c2) {
+  const rMean = (c1.r + c2.r) / 2;
+  const dr = c1.r - c2.r, dg = c1.g - c2.g, db = c1.b - c2.b;
+  return Math.sqrt((2 + rMean / 256) * dr * dr + 4 * dg * dg + (2 + (255 - rMean) / 256) * db * db);
+}
+
+// Groups a color into one of 8 45-degree hue "families" (blue, yellow/gold,
+// red, etc), or -1 for grayscale. Used alongside colorDistance so two
+// samples aren't both treated as "distinct" just because they're far apart
+// in raw RGB terms while still reading as the same basic hue.
+const HUE_BUCKET_COUNT = 8;
+function hueBucketOf(r, g, b) {
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  if (max === min) return -1;
+  let h;
+  const d = max - min;
+  switch (max) {
+    case r: h = ((g - b) / d + (g < b ? 6 : 0)); break;
+    case g: h = (b - r) / d + 2; break;
+    default: h = (r - g) / d + 4;
+  }
+  h *= 60;
+  return Math.floor(h / (360 / HUE_BUCKET_COUNT)) % HUE_BUCKET_COUNT;
+}
+
+// Builds the blurry background by sampling the album art down to a small
+// grid of cells, shuffling which cell's color ends up where, then drawing
+// that shuffled grid stretched across the full (oversized, see
+// BLUR_CANVAS_OVERSCAN) canvas. The CSS blur filter on .player-blur-bg then
+// smooths the blocky shuffled grid into soft, organic-looking color
+// regions - since the source pixels are the actual album art, the colors
+// and their relative proportions naturally match the art without needing
+// separate palette-extraction/shape-drawing logic at all.
+//
+// The canvas is always drawn at the panel's true MAXIMUM possible height -
+// player bar height plus the largest the lyrics panel could ever be
+// resized to - never at whatever height happens to be current. Every
+// state below that ceiling (lyrics closed, lyrics open at the default
+// size, or resized to anything in between) is simply a crop into this one
+// fixed-size canvas via .player-blur-clip's overflow:hidden, not a
+// separately-computed grid. This sidesteps an entire class of bug from
+// earlier attempts: recomputing cell density (or even just the canvas
+// size) for whatever height was current meant the render grid either had
+// too few rows actually landing inside a short visible window (flat/muddy
+// look) or reshuffled into a visibly different pattern on every drag tick
+// of the resize handle - including behind the player bar, which should
+// never change regardless of the lyrics panel's state.
+function drawBlurBackground(sourceImg, seedKey) {
+  if (!blurCanvas || !blurCtx || !blurWrap || !blurGroup || !sourceImg) return;
+  const visibleW = blurGroup.clientWidth || 1;
+  // Draw for the TRUE ceiling of how tall this panel could ever be - not
+  // "however tall it happens to be right now". Using the current height
+  // (even just when the lyrics panel happens to be open) meant every drag
+  // of the resize handle produced a differently-sized, differently-
+  // shuffled canvas on every tick, which made the artwork behind the
+  // player bar visibly shift during a resize even though that portion is
+  // never supposed to change. The true ceiling is the player bar's own
+  // height (always visible, fixed by its content) plus the largest the
+  // lyrics panel can ever be dragged to (see the matching cap in the
+  // lyrics resize handler, window.innerHeight - 220).
+  const playerBarH = playerBarEl.getBoundingClientRect().height || 0;
+  const maxLyricsH = window.innerHeight - 220;
+  const maxVisibleH = playerBarH + Math.max(0, maxLyricsH);
+
+  const w = visibleW + BLUR_CANVAS_OVERSCAN * 2;
+  const h = maxVisibleH + BLUR_CANVAS_OVERSCAN * 2;
+  // Both .player-blur-bg (blurWrap, the filtered element) and its canvas
+  // child get the same fixed-max-height, overscan-padded, bottom-anchored
+  // treatment - not just the canvas. filter: blur() is applied to
+  // .player-blur-bg's own box, and overflow:hidden on that same element
+  // clips its content down to whatever that box's CURRENT size is BEFORE
+  // the filter runs - so if only the canvas got this treatment while
+  // .player-blur-bg stayed inset:0 (shrinking with the panel), the filter
+  // would still end up running on a short box whenever the lyrics panel
+  // was closed, with the blur radius consuming a much larger fraction of
+  // that box than when it's tall. That mismatch is what caused the closed
+  // state to look meaningfully darker than the open state despite
+  // identical underlying pixel content (verified via direct canvas
+  // readback) - confirmed to reproduce in both Chromium and Firefox, so
+  // it's standard filter behavior to design around, not an engine quirk.
+  // .player-blur-clip (the actual outer wrapper, unfiltered) is what
+  // reveals only the current visible slice via its own overflow:hidden.
+  blurWrap.style.left = `${-BLUR_CANVAS_OVERSCAN}px`;
+  blurWrap.style.right = `${-BLUR_CANVAS_OVERSCAN}px`;
+  blurWrap.style.bottom = `${-BLUR_CANVAS_OVERSCAN}px`;
+  blurWrap.style.top = 'auto';
+  blurWrap.style.width = `${w}px`;
+  blurWrap.style.height = `${h}px`;
+
+  blurCanvas.style.left = `${-BLUR_CANVAS_OVERSCAN}px`;
+  blurCanvas.style.bottom = `${-BLUR_CANVAS_OVERSCAN}px`;
+  blurCanvas.style.top = 'auto';
+  blurCanvas.style.width = `${w}px`;
+  blurCanvas.style.height = `${h}px`;
+
+  const dpr = window.devicePixelRatio || 1;
+  blurCanvas.width = Math.max(1, Math.round(w * dpr));
+  blurCanvas.height = Math.max(1, Math.round(h * dpr));
+  blurCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  blurCtx.clearRect(0, 0, w, h);
+
+  // Sample the art at a fixed 10x10 grid, independent of the destination
+  // panel's shape or size - this always yields 100 distinct sample colors
+  // pulled from across the source art.
+  const SAMPLE_SIZE = 10;
+  const sampleCanvas = document.createElement('canvas');
+  sampleCanvas.width = SAMPLE_SIZE;
+  sampleCanvas.height = SAMPLE_SIZE;
+  const sampleCtx = sampleCanvas.getContext('2d');
+  sampleCtx.drawImage(sourceImg, 0, 0, SAMPLE_SIZE, SAMPLE_SIZE);
+  let cells;
+  try {
+    cells = sampleCtx.getImageData(0, 0, SAMPLE_SIZE, SAMPLE_SIZE).data;
+  } catch (e) {
+    // Canvas may be tainted (e.g. cross-origin without CORS headers)
+    blurCtx.fillStyle = '#121214';
+    blurCtx.fillRect(0, 0, w, h);
     return;
   }
-  for (let i = 0; i < 4; i++) {
-    root.setProperty(`--blur-color-${i + 1}`, colors[i % colors.length]);
+  const samplePixels = [];
+  for (let i = 0; i < SAMPLE_SIZE * SAMPLE_SIZE; i++) {
+    const o = i * 4;
+    samplePixels.push({ r: cells[o], g: cells[o + 1], b: cells[o + 2] });
   }
+
+  // Order the 100 samples so the most visually distinct ones come first -
+  // the front of the list is what a small render grid mostly draws from
+  // (later cells only get used via repetition, see below), so front-
+  // loading distinct colors matters more than a plain random shuffle,
+  // which could just as easily cluster several near-identical shades early.
+  //
+  // Rather than an iterative farthest-point search, this groups samples by
+  // hue family first (so "different hue" falls out of the grouping itself,
+  // not a per-step check), sorts each group by distance from its own
+  // average (pushing each family's most saturated/extreme shade to the
+  // front, most washed-out/average-ish ones last), then interleaves the
+  // groups round-robin - so consecutive picks in the final order alternate
+  // between hue families whenever more than one is present. A seeded
+  // rotation of which hue family starts the interleave keeps the same art
+  // always producing the same order without every track starting on
+  // whichever hue happens to sort first numerically.
+  const byHue = new Map(); // hueBucket -> pixel[], -1 for grayscale
+  for (const p of samplePixels) {
+    const hb = hueBucketOf(p.r, p.g, p.b);
+    if (!byHue.has(hb)) byHue.set(hb, []);
+    byHue.get(hb).push(p);
+  }
+  for (const group of byHue.values()) {
+    const n = group.length;
+    const avg = {
+      r: group.reduce((s, p) => s + p.r, 0) / n,
+      g: group.reduce((s, p) => s + p.g, 0) / n,
+      b: group.reduce((s, p) => s + p.b, 0) / n
+    };
+    group.sort((a, b) => colorDistance(b, avg) - colorDistance(a, avg));
+  }
+
+  // Dark pixels (near-black backgrounds, shadows, dark clothing/hair) tend
+  // to be heavily overrepresented in album art - but a hue can genuinely BE
+  // dark throughout (deep red/maroon, dark teal) without that making it any
+  // less real or important a color; a dark but saturated red dress is a
+  // meaningful accent, not "background noise that happens to be reddish".
+  // So dark-reduction is applied WITHIN each hue group, not globally across
+  // the whole pool before hue grouping - that ordering matters: applying it
+  // first (as an earlier version did) meant a hue that happened to run dark
+  // got its dark members thinned out by a pass that had no idea those
+  // pixels were a specific, real hue worth preserving, and could end up
+  // almost entirely eliminated before hue grouping ever got a chance to
+  // recognize it as its own distinct color family. Doing it per-hue-group
+  // instead only reduces each hue's OWN excess of dark members relative to
+  // its own lighter members, never relative to unrelated hues or the
+  // image's dark background.
+  const DARK_LIGHTNESS_THRESHOLD = 60; // 0-255
+  const DARK_EXTRA_REDUCTION = 0.4; // extra factor on top of sqrt, applied only to a group's dark subset
+  function lightnessOf(p) { return (Math.max(p.r, p.g, p.b) + Math.min(p.r, p.g, p.b)) / 2; }
+  for (const [hb, group] of byHue) {
+    const dark = group.filter(p => lightnessOf(p) < DARK_LIGHTNESS_THRESHOLD);
+    if (dark.length < 2) continue; // nothing meaningful to thin
+    const notDark = group.filter(p => lightnessOf(p) >= DARK_LIGHTNESS_THRESHOLD);
+    const keepDark = Math.max(1, Math.round(Math.sqrt(dark.length) * DARK_EXTRA_REDUCTION));
+    // dark/notDark both inherit the group's existing furthest-from-average
+    // sort order, so trimming dark down to keepDark still keeps that
+    // subset's most distinctive (not just first-encountered) members.
+    const thinnedDark = keepDark < dark.length ? dark.slice(0, keepDark) : dark;
+    byHue.set(hb, notDark.concat(thinnedDark).sort((a, b) => group.indexOf(a) - group.indexOf(b)));
+  }
+
+  const rand = mulberry32(hashStringToSeed(seedKey || ''));
+  const groups = [...byHue.values()];
+  const startOffset = Math.floor(rand() * groups.length);
+  const orderedColors = [];
+  let idx = 0;
+  const totalThinned = groups.reduce((s, g) => s + g.length, 0);
+  while (orderedColors.length < totalThinned) {
+    const group = groups[(idx + startOffset) % groups.length];
+    if (group.length) orderedColors.push(group.shift());
+    idx++;
+  }
+  const uniqueColors = orderedColors.map(c => `rgb(${c.r}, ${c.g}, ${c.b})`);
+
+  // Render grid sized from the (always-tall) canvas itself, targeting a
+  // fixed cell size roughly matched to the blur radius (50px, see
+  // .player-blur-bg's filter) - no overscan-ratio compensation needed here
+  // since we're no longer trying to squeeze enough rows into a short
+  // visible window; the canvas is always tall enough for this to work.
+  const TARGET_CELL_SIZE = 45; // px
+  const renderCols = Math.max(3, Math.round(w / TARGET_CELL_SIZE));
+  const renderRows = Math.max(3, Math.round(h / TARGET_CELL_SIZE));
+  const totalCells = renderCols * renderRows;
+
+  const colors = [];
+  for (let i = 0; i < totalCells; i++) {
+    colors.push(uniqueColors[i % uniqueColors.length]);
+  }
+  // If the render grid needed more cells than there are unique samples
+  // (repetition kicked in), shuffle the final list once more so repeated
+  // instances of the same color don't cluster together in a visible
+  // pattern across the grid.
+  if (totalCells > uniqueColors.length) {
+    for (let i = colors.length - 1; i > 0; i--) {
+      const j = Math.floor(rand() * (i + 1));
+      [colors[i], colors[j]] = [colors[j], colors[i]];
+    }
+  }
+
+  // Draw the grid stretched across the full (oversized) canvas.
+  const cellW = w / renderCols;
+  const cellH = h / renderRows;
+  for (let row = 0; row < renderRows; row++) {
+    for (let col = 0; col < renderCols; col++) {
+      blurCtx.fillStyle = colors[row * renderCols + col];
+      // Slightly overdraw each cell (by half a pixel-ish amount, scaled to
+      // cell size) so adjacent cells overlap a hair and there's no thin
+      // seam line surviving the blur at cell boundaries.
+      blurCtx.fillRect(
+        Math.floor(col * cellW) - 1,
+        Math.floor(row * cellH) - 1,
+        Math.ceil(cellW) + 2,
+        Math.ceil(cellH) + 2
+      );
+    }
+  }
+}
+
+let lastBlurSourceImg = null;
+let lastBlurSeedKey = null;
+window.addEventListener('resize', () => {
+  if (lastBlurSourceImg) drawBlurBackground(lastBlurSourceImg, lastBlurSeedKey);
+});
+
+function applyBlurColors(sourceImg, seedKey, accentColor) {
+  const root = document.documentElement.style;
+  if (!sourceImg || !accentColor) {
+    root.setProperty('--blur-opacity', '0');
+    root.setProperty('--accent-color', '#e8e8ea');
+    lastBlurSourceImg = null;
+    lastBlurSeedKey = null;
+    return;
+  }
+  lastBlurSourceImg = sourceImg;
+  lastBlurSeedKey = seedKey;
+  drawBlurBackground(sourceImg, seedKey);
   root.setProperty('--blur-opacity', '1');
-  // Use the most dominant extracted color as the accent/highlight color, clamped
-  // to a legible lightness/saturation range so it harmonizes with the colored
-  // background without disappearing on very light or very dark album art.
-  root.setProperty('--accent-color', makeAccentColor(colors[0]));
+  // Clamp to a legible lightness/saturation range so the accent color
+  // harmonizes with the mosaic background without disappearing on very
+  // light or very dark album art.
+  root.setProperty('--accent-color', makeAccentColor(accentColor));
 }
 
 function updatePlayerArt(trackPath) {
@@ -1156,8 +1458,8 @@ function updatePlayerArt(trackPath) {
 
   sampleImg.onload = () => {
     if (playerArtTrackPath !== trackPath) return; // a newer track started before this resolved
-    const colors = extractDominantColors(sampleImg, 4);
-    applyBlurColors(colors);
+    const accentColor = extractAccentColor(sampleImg);
+    applyBlurColors(sampleImg, artUrl, accentColor);
   };
 
   sampleImg.onerror = () => {
@@ -1619,10 +1921,11 @@ function renderQueue() {
     queuePanel.innerHTML = '<div style="padding:10px;color:#77777d;font-size:13px;">Queue is empty</div>';
     return;
   }
-  // Only the first PAGINATION_CHUNK_SIZE rows render up front; the rest render
-  // as the user scrolls the queue panel (see renderPaginated). Indices are
-  // still assigned against the full `queue` array either way, since drag/drop
-  // and remove-at-index need to stay correct regardless of what's rendered.
+  // Only the first chunk (settings.maxItemsLoad rows, or everything if set to
+  // 0/unlimited) renders up front; the rest render as the user scrolls the
+  // queue panel (see renderPaginated). Indices are still assigned against the
+  // full `queue` array either way, since drag/drop and remove-at-index need
+  // to stay correct regardless of what's rendered.
   renderPaginated(queuePanel, queue, buildQueueRow);
 }
 
@@ -2498,6 +2801,7 @@ const skipDeleteConfirmInput = document.getElementById('skipDeleteConfirmInput')
 const rememberVolumeInput = document.getElementById('rememberVolumeInput');
 const hideNonMusicInput = document.getElementById('hideNonMusicInput');
 const replayGainInput = document.getElementById('replayGainInput');
+const maxItemsLoadInput = document.getElementById('maxItemsLoadInput');
 
 function openSettings() {
   seekBackInput.value = settings.seekBack;
@@ -2506,6 +2810,7 @@ function openSettings() {
   rememberVolumeInput.checked = settings.rememberVolume;
   hideNonMusicInput.checked = settings.hideNonMusic;
   replayGainInput.checked = settings.replayGainEnabled;
+  maxItemsLoadInput.value = settings.maxItemsLoad;
   settingsOverlay.classList.remove('hidden');
 }
 function closeSettings() {
@@ -2518,11 +2823,24 @@ function closeSettings() {
   const hideNonMusicChanged = settings.hideNonMusic !== hideNonMusicInput.checked;
   settings.hideNonMusic = hideNonMusicInput.checked;
   settings.replayGainEnabled = replayGainInput.checked;
+  const maxItemsLoadRaw = parseInt(maxItemsLoadInput.value, 10);
+  const newMaxItemsLoad = isFinite(maxItemsLoadRaw) && maxItemsLoadRaw >= 0 ? maxItemsLoadRaw : DEFAULT_SETTINGS.maxItemsLoad;
+  const maxItemsLoadChanged = settings.maxItemsLoad !== newMaxItemsLoad;
+  settings.maxItemsLoad = newMaxItemsLoad;
   saveSettings();
   settingsOverlay.classList.add('hidden');
   if (hideNonMusicChanged) {
     if (isSearching) performSearch(searchInput.value.trim());
     else browse(currentPath, { keepSort: true });
+  } else if (maxItemsLoadChanged) {
+    // Re-render whatever's currently visible so the new chunk size (or
+    // unlimited, for 0) takes effect immediately rather than only on the
+    // next navigation.
+    if (isSearching) performSearch(searchInput.value.trim());
+    else if (libraryView) openLibrary(libraryView.type, libraryView.name, { skipHistory: true, keepSort: true });
+    else renderFileList(lastFetchedItems);
+    renderQueue();
+    renderPlaylists();
   }
   const track = queue[queueIndex];
   if (track) getMeta(track.path).then(meta => applyReplayGain(meta.replayGainDb));
@@ -2787,6 +3105,10 @@ function toggleLyricsBox() {
   lyricsBoxWrap.classList.toggle('open', lyricsBoxOpen);
   lyricsBoxEl.classList.toggle('open', lyricsBoxOpen);
   lyricsToggleBtn.title = lyricsBoxOpen ? 'Hide lyrics' : 'Show lyrics';
+  // No redraw needed: drawBlurBackground always draws tall enough for the
+  // panel's maximum possible height and anchors the canvas to the bottom
+  // of its wrapper, so opening/closing the lyrics panel just reveals more
+  // or less of the same already-drawn artwork via CSS overflow:hidden.
 }
 lyricsToggleBtn.addEventListener('click', toggleLyricsBox);
 
@@ -3637,6 +3959,10 @@ lyricsResizeHandle.addEventListener('mousedown', (e) => {
     const maxHeight = window.innerHeight - 220; // keep the file list from being squeezed to nothing
     const newHeight = Math.min(maxHeight, Math.max(120, startHeight - delta));
     document.documentElement.style.setProperty('--lyrics-h', newHeight + 'px');
+    // No redraw needed: drawBlurBackground already sized the canvas for
+    // this exact maximum (window.innerHeight - 220 + player bar height),
+    // so dragging within that range just reveals more/less of the same
+    // fixed artwork via CSS, the same way open/close does.
   }
   function onUp() {
     lyricsResizeHandle.classList.remove('resizing');
