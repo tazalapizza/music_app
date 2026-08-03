@@ -506,7 +506,7 @@
      subsets of them in row divs would change desktop's own layout). */
   #playerBar.player-bar.expanded .full-player {
     display: grid;
-    grid-template-rows: 1fr auto auto auto auto auto;
+    grid-template-rows: 1fr auto auto auto auto auto auto;
     row-gap: 14px;
     width: 100%;
     min-height: 0;
@@ -515,7 +515,54 @@
   }
   .fp-row { display: flex; align-items: center; justify-content: center; }
 
-  .fp-row-art { min-height: 0; }
+  .fp-row-art { min-height: 0; position: relative; }
+
+  /* ----- Slide-to-seek on the full-player art -----
+     #fpArtDragWrap holds just the art/icon and is what actually translates
+     under the pointer. The two circles live underneath it in normal flow
+     (absolutely centered on the row) so they're only ever revealed in the
+     gap the art leaves behind as it slides — never on top of the art. */
+  .fp-art-drag-wrap {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    touch-action: pan-y;
+    cursor: grab;
+    position: relative;
+    z-index: 2;
+    -webkit-user-drag: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .fp-art-drag-wrap img { -webkit-user-drag: none; pointer-events: none; }
+  .fp-art-drag-wrap .fp-art-icon { pointer-events: none; }
+  .fp-art-drag-wrap.dragging { cursor: grabbing; }
+  .fp-art-drag-wrap:not(.dragging) { transition: transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1); }
+
+  .fp-art-seek-indicator {
+    position: absolute;
+    top: 50%;
+    width: 40px;
+    height: 40px;
+    color: #e8e8ea;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-50%) scale(0.85);
+    transition: opacity 0.2s ease, transform 0.2s ease;
+    z-index: 1;
+  }
+  .fp-art-seek-indicator.visible { opacity: 1; transform: translateY(-50%) scale(1); }
+  .fp-art-seek-indicator-arc { position: absolute; top: 0; left: 0; }
+  .fp-art-seek-indicator-num { position: relative; font-size: 11px; font-weight: 600; line-height: 1; }
+  /* Backward circle sits to the left of center (revealed as art slides
+     right); forward circle sits to the right (revealed as art slides
+     left). Their own position stays fixed — only opacity/scale animate. */
+  .fp-art-seek-back { left: calc(50% - 150px); }
+  .fp-art-seek-forward { right: calc(50% - 150px); }
+
   .fp-art, .fp-art-icon { width: 220px; height: 220px; border-radius: 12px; flex-shrink: 0; }
   .fp-art { object-fit: cover; background: #2a2a2e; }
   .fp-art.hidden { display: none; }
@@ -553,7 +600,7 @@
   .fp-title { font-size: 18px; font-weight: 600; color: #e8e8ea; line-height: 1.2; }
   .fp-subtitle { font-size: 13px; color: #a8a8ae; line-height: 1.2; }
 
-  .fp-row-seek { padding: 0 4px; }
+  .fp-row-seek { padding: 0 4px; margin-top: 14px; }
   #fpSeekBar {
     width: 100%;
     margin: 0;
@@ -628,6 +675,75 @@
     cursor: pointer;
   }
 
+  /* ----- Upcoming track row -----
+     Same visual language as .mini-player (art/icon + title/subtitle sizes,
+     colors, ellipsis behavior) but its own classes/IDs — nothing here is
+     shared with or can affect the mini player. Only a single next button;
+     this row previews the queue, it isn't a second transport bar. */
+  .fp-row-upcoming { flex-direction: column; align-items: stretch; gap: 6px; padding: 0 4px; }
+  .fp-row-upcoming.hidden { display: none; }
+  .fp-upcoming-label {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #8a8a90;
+  }
+  .fp-upcoming-track { display: flex; align-items: center; gap: 10px; }
+  .fp-upcoming-art, .fp-upcoming-art-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 6px;
+    flex-shrink: 0;
+  }
+  .fp-upcoming-art { object-fit: cover; background: #2a2a2e; }
+  .fp-upcoming-art.hidden { display: none; }
+  .fp-upcoming-art-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #2a2a2e;
+    font-size: 18px;
+    opacity: 0.7;
+  }
+  .fp-upcoming-art-icon.hidden { display: none; }
+  .fp-upcoming-text { flex: 1; min-width: 0; overflow: hidden; }
+  .fp-upcoming-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #e8e8ea;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .fp-upcoming-subtitle {
+    font-size: 11px;
+    color: #a8a8ae;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .fp-upcoming-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    background: none;
+    border: none;
+    color: #e8e8ea;
+    font-size: 16px;
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    cursor: pointer;
+  }
+  .fp-upcoming-duration {
+    flex-shrink: 0;
+    font-size: 11px;
+    color: #a8a8ae;
+    font-variant-numeric: tabular-nums;
+  }
+
   /* ----- Context menu: native app action sheet -----
      Anchored to the bottom edge instead of the tap point, which is
      unreliable on touch (no hover, finger occludes the target). JS still
@@ -644,6 +760,14 @@
     border-radius: 14px;
   }
   .context-menu-item { padding: 12px 14px; font-size: 15px; }
+
+  /* ----- Settings: ReplayGain disabled on mobile -----
+     Matches the mobile check in state.js (REPLAYGAIN_MOBILE_QUERY); the
+     checkbox's disabled attribute itself is set by layout-init.js so this
+     is unreachable by keyboard/screen reader too, not just dimmed. */
+  #replayGainInput:disabled { opacity: 0.5; }
+  .settings-row:has(#replayGainInput:disabled) label { opacity: 0.5; }
+  #replayGainMobileHint { display: block; }
 
   /* ----- Settings modal: mobile-only login/logout row -----
      Styled to match the existing settings-row-buttons look.

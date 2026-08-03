@@ -6,8 +6,9 @@
 .app {
   display: flex;
   flex-direction: column;
+  /* See base.css's body rule for why 100dvh is intentionally not used
+     (or no longer overrides 100vh) here. */
   height: 100vh;
-  height: 100dvh;
   overflow: hidden;
 }
 .topbar {

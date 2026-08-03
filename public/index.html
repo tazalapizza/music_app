@@ -20,7 +20,10 @@
      viewport height compensating, leaving a matching gap at the bottom
      (the "chin gap"). Omitting the tag entirely gives a normal opaque
      status bar and avoids the bug at the source, rather than working
-     around it. -->
+     around it. Re-tested with the safe-area variables fully wired up
+     (see responsive.css) and it made no difference to the reported
+     bottom-gap bug, so reverted rather than carrying the regression risk
+     for no benefit. -->
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Vibing">
 
@@ -145,15 +148,15 @@
 
     <nav class="bottom-nav" id="bottomNav">
       <button class="bottom-nav-btn active" data-mobile-tab="files" title="Files">
-        <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+        <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
         <span>Files</span>
       </button>
       <button class="bottom-nav-btn" data-mobile-tab="queue" title="Queue">
-        <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
+        <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
         <span>Queue</span>
       </button>
       <button class="bottom-nav-btn" data-mobile-tab="playlists" title="Playlists">
-        <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15V6"></path><path d="M18.5 18a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z"></path><path d="M12 12H3"></path><path d="M16 6H3"></path><path d="M12 18H3"></path></svg>
+        <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15V6"></path><path d="M18.5 18a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z"></path><path d="M12 12H3"></path><path d="M16 6H3"></path><path d="M12 18H3"></path></svg>
         <span>Playlists</span>
       </button>
     </nav>
@@ -236,8 +239,23 @@
            via layout-init.js; buttons forward clicks to the real ones. -->
       <div class="full-player" id="fullPlayer">
         <div class="fp-row fp-row-art" id="fpArtRow">
-          <img id="fpArt" class="fp-art hidden" alt="">
-          <span id="fpArtIcon" class="fp-art-icon">🎵</span>
+          <!-- Skip-seek indicator circles: sit behind the art, revealed in
+               the gap that opens up as the art slides off-center. Forward
+               circle is on the right (revealed when art slides left);
+               backward circle is on the left (revealed when art slides
+               right) — see the "Slide-to-seek" block in layout-init.js. -->
+          <div class="fp-art-seek-indicator fp-art-seek-back" id="fpArtSeekBack">
+            <svg class="fp-art-seek-indicator-arc" viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path></svg>
+            <span class="fp-art-seek-indicator-num" id="fpArtSeekBackNum"></span>
+          </div>
+          <div class="fp-art-seek-indicator fp-art-seek-forward" id="fpArtSeekForward">
+            <svg class="fp-art-seek-indicator-arc" viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path></svg>
+            <span class="fp-art-seek-indicator-num" id="fpArtSeekForwardNum"></span>
+          </div>
+          <div class="fp-art-drag-wrap" id="fpArtDragWrap">
+            <img id="fpArt" class="fp-art hidden" alt="">
+            <span id="fpArtIcon" class="fp-art-icon">🎵</span>
+          </div>
           <div class="mobile-lyrics-view hidden" id="mobileLyricsView">
             <div class="lyrics-empty" id="mobileLyricsEmpty">No lyrics found</div>
             <div class="lyrics-lines" id="mobileLyricsLines"></div>
@@ -256,7 +274,7 @@
         </div>
         <div class="fp-row fp-row-icons">
           <button id="fpLyricsBtn" class="fp-icon-btn" title="Show lyrics">
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h9l4 4v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"></path><path d="M15 3v4h4"></path><line x1="7.5" y1="12" x2="12.5" y2="12"></line><line x1="7.5" y1="15" x2="11" y2="15"></line><path d="M14.5 17.2V11l3-0.6v5.8"></path><circle cx="13.2" cy="17.6" r="1.3"></circle><circle cx="16.2" cy="17" r="1.3"></circle></svg>
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h9l4 4v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"></path><path d="M15 3v4h4"></path><line x1="7.5" y1="12" x2="12.5" y2="12"></line><line x1="7.5" y1="15" x2="11" y2="15"></line><path d="M14.5 17.2V11l3-0.6v5.8"></path><circle cx="13.2" cy="17.6" r="1.3"></circle><circle cx="16.2" cy="17" r="1.3"></circle></svg>
           </button>
           <button id="fpShuffleBtn" class="fp-icon-btn" title="Shuffle queue">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-shuffle"></use></svg>
@@ -277,6 +295,25 @@
           <button id="fpOptionsBtn" class="fp-small-btn" title="More options">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><circle cx="12" cy="5" r="1.8"></circle><circle cx="12" cy="12" r="1.8"></circle><circle cx="12" cy="19" r="1.8"></circle></svg>
           </button>
+        </div>
+        <!-- ================= UPCOMING TRACK =================
+             Same visual language as #miniPlayer (art/icon + title/subtitle
+             + a transport button) but read-only aside from the single next
+             button — no play/pause or prev, since this row isn't "now
+             playing", it's a preview of what's queued after it. Hidden
+             entirely when there's no next track (see layout-init.js). -->
+        <div class="fp-row fp-row-upcoming hidden" id="fpUpcomingRow">
+          <div class="fp-upcoming-label">Up next</div>
+          <div class="fp-upcoming-track">
+            <img id="fpUpcomingArt" class="fp-upcoming-art hidden" alt="">
+            <span id="fpUpcomingArtIcon" class="fp-upcoming-art-icon">🎵</span>
+            <div class="fp-upcoming-text">
+              <div class="fp-upcoming-title" id="fpUpcomingTitle"></div>
+              <div class="fp-upcoming-subtitle" id="fpUpcomingSubtitle"></div>
+            </div>
+            <div class="fp-upcoming-duration" id="fpUpcomingDuration"></div>
+            <button id="fpUpcomingNextBtn" class="fp-upcoming-btn" title="Next"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><use href="#icon-next"></use></svg></button>
+          </div>
         </div>
       </div>
 
@@ -473,6 +510,9 @@
       <div class="settings-row settings-row-checkbox">
         <label for="replayGainInput">Normalize volume (ReplayGain)</label>
         <input type="checkbox" id="replayGainInput">
+      </div>
+      <div class="settings-row-hint" id="replayGainMobileHint">
+        Temporarily unavailable on mobile (background playback reliability).
       </div>
 
       <div class="settings-row settings-row-buttons">

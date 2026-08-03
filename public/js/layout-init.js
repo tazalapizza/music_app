@@ -5,6 +5,37 @@
 // Depends on: everything above.
 // ---------------------------------------------------------------------------
 
+// ---------- iOS PWA cold-start viewport/safe-area recheck ----------
+// On iOS standalone launch, env(safe-area-inset-*) values (used for
+// --safe-top/--safe-bottom in base.css) can be stale or briefly wrong until
+// a geometry change forces WebKit to recompute them — the same class of bug
+// that affects 100dvh (see base.css/topbar.css, which intentionally use
+// 100vh instead for exactly this reason). Left unaddressed, this is what
+// produced a visible gap between the bottom nav and the actual screen edge
+// only in PWA/standalone mode. This block is the belt-and-suspenders fix:
+// nudge the viewport-fit meta tag off and back on (forces a recalculation
+// without needing the user to rotate the device), then re-check on a couple
+// of short delays and on any later resize/orientation change.
+if (window.navigator.standalone || window.matchMedia('(display-mode: standalone)').matches) {
+  const forceSafeAreaRecalc = () => {
+    const meta = document.querySelector('meta[name="viewport"]');
+    if (!meta) return;
+    const original = meta.getAttribute('content');
+    if (!original || !original.includes('viewport-fit=cover')) return;
+    meta.setAttribute('content', original.replace('viewport-fit=cover', 'viewport-fit=auto'));
+    requestAnimationFrame(() => {
+      meta.setAttribute('content', original);
+    });
+  };
+  forceSafeAreaRecalc();
+  // Staggered rechecks: no single moment is reliably "the right one" right
+  // after cold start, so this covers a spread rather than picking one delay.
+  setTimeout(forceSafeAreaRecalc, 100);
+  setTimeout(forceSafeAreaRecalc, 500);
+  setTimeout(forceSafeAreaRecalc, 1000);
+  window.addEventListener('orientationchange', () => setTimeout(forceSafeAreaRecalc, 300));
+}
+
 // ---------- Resizable layout (column widths + sidebar width) ----------
 const COL_MIN_WIDTHS = { title: 80, artist: 60, album: 60, duration: 50, size: 50 };
 const SIDEBAR_MIN = 220;
@@ -460,6 +491,17 @@ function applyMobileSearchPlaceholder() {
 MOBILE_BREAKPOINT.addEventListener('change', applyMobileSearchPlaceholder);
 applyMobileSearchPlaceholder();
 
+// ReplayGain is a no-op on mobile right now (see REPLAYGAIN_MOBILE_QUERY in
+// state.js) — disable the checkbox itself (not just visually, via CSS) so
+// it's also unreachable by keyboard/screen reader, matching responsive.css's
+// dimmed styling and the hint text under it.
+function applyReplayGainMobileDisabled() {
+  const input = document.getElementById('replayGainInput');
+  if (input) input.disabled = MOBILE_BREAKPOINT.matches;
+}
+MOBILE_BREAKPOINT.addEventListener('change', applyReplayGainMobileDisabled);
+applyReplayGainMobileDisabled();
+
 // ---------- Mobile full player: mirrors the real (desktop) player ----------
 // Same approach as the mini player: #fullPlayer is a fully independent set
 // of elements with real per-row divs (fp-row-art/title/seek/timers/icons/
@@ -503,6 +545,69 @@ new MutationObserver(syncFpTitle).observe(realTrackName, { childList: true, char
 new MutationObserver(syncFpTitle).observe(realTrackPath, { childList: true, characterData: true, subtree: true });
 syncFpArt();
 syncFpTitle();
+
+// ---- Upcoming track row ----
+// Not mirrored from another DOM element like everything else above — the
+// current track's own row divs never held "what's next" info to mirror.
+// Instead this reads queue/queueIndex directly (the same globals
+// playback.js's playCurrent() uses) and reuses the existing getMeta()
+// cache, so no metadata fetching logic is duplicated. Re-checked on every
+// track change via the same trackName/trackPath observers that already
+// fire for that (see syncFpTitle above) — those are a reliable proxy for
+// "the current track just changed" regardless of what caused it (next/
+// prev/queue click/track ending).
+const fpUpcomingRow = document.getElementById('fpUpcomingRow');
+const fpUpcomingArt = document.getElementById('fpUpcomingArt');
+const fpUpcomingArtIcon = document.getElementById('fpUpcomingArtIcon');
+const fpUpcomingTitle = document.getElementById('fpUpcomingTitle');
+const fpUpcomingSubtitle = document.getElementById('fpUpcomingSubtitle');
+const fpUpcomingDuration = document.getElementById('fpUpcomingDuration');
+function syncFpUpcoming() {
+  const nextTrack = (queueIndex >= 0 && queueIndex + 1 < queue.length) ? queue[queueIndex + 1] : null;
+  if (!nextTrack) {
+    fpUpcomingRow.classList.add('hidden');
+    return;
+  }
+  fpUpcomingRow.classList.remove('hidden');
+  // Show the filename immediately (matches how playCurrent() shows the
+  // current track before its own getMeta() resolves), then upgrade to the
+  // real title/artist/album/art/duration once metadata is available.
+  fpUpcomingTitle.textContent = nextTrack.name;
+  fpUpcomingSubtitle.textContent = '';
+  fpUpcomingDuration.textContent = '';
+  fpUpcomingArt.classList.add('hidden');
+  fpUpcomingArtIcon.classList.remove('hidden');
+  getMeta(nextTrack.path).then(meta => {
+    // Guard against a race: the queue may have advanced again by the time
+    // this resolves (e.g. rapid next-track taps), so only apply it if
+    // this is still actually the upcoming track.
+    const stillNext = queueIndex >= 0 && queueIndex + 1 < queue.length && queue[queueIndex + 1].path === nextTrack.path;
+    if (!stillNext) return;
+    fpUpcomingTitle.textContent = meta.title || nextTrack.name;
+    // "Artist • Album", matching the subtitle format used elsewhere
+    // (mini/full player's own now-playing subtitle) rather than showing
+    // only the artist.
+    fpUpcomingSubtitle.textContent = [meta.artist, meta.album].filter(Boolean).join(' • ');
+    fpUpcomingDuration.textContent = (typeof meta.duration === 'number') ? formatTime(meta.duration) : '';
+    if (meta.hasArt) {
+      fpUpcomingArt.src = `/api/art?path=${encodeURIComponent(nextTrack.path)}`;
+      fpUpcomingArt.classList.remove('hidden');
+      fpUpcomingArtIcon.classList.add('hidden');
+    } else {
+      fpUpcomingArt.classList.add('hidden');
+      fpUpcomingArtIcon.classList.remove('hidden');
+    }
+  });
+}
+new MutationObserver(syncFpUpcoming).observe(realTrackName, { childList: true, characterData: true, subtree: true });
+// Also re-check on any change to which queue row is marked '.playing' —
+// updateQueuePlayingIndicator() (queue-playlists.js) sets that class on
+// every track change AND on queue reordering/removal, so this catches
+// "the next track changed because the queue was reordered" too, not just
+// "the current track changed" (which the trackName observer above covers).
+new MutationObserver(syncFpUpcoming).observe(queuePanel, { attributes: true, attributeFilter: ['class'], subtree: true });
+document.getElementById('fpUpcomingNextBtn').addEventListener('click', () => realNextBtn.click());
+syncFpUpcoming();
 
 // ---- Seek bar + split timers ----
 // Desktop shows one combined "0:00 / -1:23" string in #timeDisplay (see
@@ -556,6 +661,100 @@ new MutationObserver(() => syncPlayPauseIcon(fpPlayPauseBtn))
   .observe(realPlayPauseBtn, { attributes: true, attributeFilter: ['class'], childList: true, characterData: true, subtree: true });
 syncPlayPauseIcon(fpPlayPauseBtn);
 mirrorButton(document.getElementById('fpShuffleBtn'), document.getElementById('shuffleBtn'), { mirrorActiveState: true });
+
+// ---- Slide-to-seek on the full-player art ----
+// Mobile-only by construction: #fpArtDragWrap only exists inside
+// #fullPlayer, which responsive.css hides entirely outside the mobile
+// breakpoint. Desktop's own seek shortcuts (arrow keys) are untouched.
+// Dragging the art left reveals the forward circle and, on release, seeks
+// +settings.seekForward; dragging right reveals the backward circle and
+// seeks -settings.seekBack. The art itself always snaps back to center.
+(() => {
+  const dragWrap = document.getElementById('fpArtDragWrap');
+  const backIndicator = document.getElementById('fpArtSeekBack');
+  const backNum = document.getElementById('fpArtSeekBackNum');
+  const forwardIndicator = document.getElementById('fpArtSeekForward');
+  const forwardNum = document.getElementById('fpArtSeekForwardNum');
+
+  const MAX_DRAG = 70; // px — how far the art can actually slide
+  let dragging = false;
+  let startX = 0;
+  let offsetX = 0;
+  let pointerId = null;
+
+  function setIndicators(offset) {
+    // offset < 0 → art moved left → forward (skip ahead) revealed on the right
+    // offset > 0 → art moved right → backward (skip back) revealed on the left
+    const revealFrac = Math.min(1, Math.abs(offset) / MAX_DRAG);
+    if (offset < 0) {
+      forwardNum.textContent = settings.seekForward;
+      forwardIndicator.classList.toggle('visible', revealFrac > 0.15);
+      backIndicator.classList.remove('visible');
+    } else if (offset > 0) {
+      backNum.textContent = settings.seekBack;
+      backIndicator.classList.toggle('visible', revealFrac > 0.15);
+      forwardIndicator.classList.remove('visible');
+    } else {
+      forwardIndicator.classList.remove('visible');
+      backIndicator.classList.remove('visible');
+    }
+  }
+
+  function resetArt() {
+    dragWrap.classList.remove('dragging');
+    dragWrap.style.transform = 'translateX(0px)';
+    backIndicator.classList.remove('visible');
+    forwardIndicator.classList.remove('visible');
+  }
+
+  function applySeek(offset) {
+    if (!audioEl.duration || !isFinite(audioEl.duration)) return;
+    const revealFrac = Math.abs(offset) / MAX_DRAG;
+    if (revealFrac <= 0.15) return; // treat as a tap/negligible drag, not a seek
+    if (offset < 0) {
+      audioEl.currentTime = Math.min(audioEl.duration, audioEl.currentTime + settings.seekForward);
+    } else {
+      audioEl.currentTime = Math.max(0, audioEl.currentTime - settings.seekBack);
+    }
+  }
+
+  dragWrap.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    dragging = true;
+    startX = e.clientX;
+    offsetX = 0;
+    pointerId = e.pointerId;
+    dragWrap.setPointerCapture(pointerId);
+    dragWrap.classList.add('dragging');
+  });
+
+  dragWrap.addEventListener('pointermove', (e) => {
+    if (!dragging || e.pointerId !== pointerId) return;
+    const rawDelta = e.clientX - startX;
+    offsetX = Math.max(-MAX_DRAG, Math.min(MAX_DRAG, rawDelta));
+    dragWrap.style.transform = `translateX(${offsetX}px)`;
+    setIndicators(offsetX);
+  });
+
+  function endDrag(e) {
+    if (!dragging || (pointerId !== null && e.pointerId !== pointerId)) return;
+    dragging = false;
+    dragWrap.releasePointerCapture(pointerId);
+    pointerId = null;
+    applySeek(offsetX);
+    resetArt();
+    offsetX = 0;
+  }
+
+  dragWrap.addEventListener('pointerup', endDrag);
+  dragWrap.addEventListener('pointercancel', endDrag);
+  // Safety net: if the browser revokes pointer capture unexpectedly (e.g.
+  // scroll takeover, OS gesture), still resolve the drag instead of leaving
+  // the art stuck off-center with dragging=true forever.
+  dragWrap.addEventListener('lostpointercapture', (e) => {
+    if (dragging && e.pointerId === pointerId) endDrag(e);
+  });
+})();
 
 // Loop button: mirrors the real button's icon and active-state, but not
 // its label verbatim — desktop shows "Off"/"All"/"One" next to the icon,
@@ -713,37 +912,96 @@ if ('mediaSession' in navigator) {
     const subtitleParts = [...realTrackPath.querySelectorAll('.pb-link')].map(el => el.textContent);
     const artist = subtitleParts[0] || '';
     const album = subtitleParts[1] || '';
+    // Declaring a fixed 512x512/image-png artwork entry when /api/art
+    // actually serves the embedded art as-is (real size, real format —
+    // often JPEG, rarely square) was a lie some mobile browsers (notably
+    // iOS Safari) silently punish by dropping the whole MediaMetadata
+    // object, not just the artwork — which was why nothing showed up in
+    // the OS now-playing UI even though playback itself worked fine.
+    // sizes:'any' + a type sniffed from the actual <img> response's
+    // content-type is honest about what's really being served.
     const artwork = (!realPlayerArt.classList.contains('hidden') && realPlayerArt.src)
-      ? [{ src: realPlayerArt.src, sizes: '512x512', type: 'image/png' }]
+      ? [{ src: realPlayerArt.src, sizes: 'any', type: realPlayerArtMime || undefined }]
       : [];
-    navigator.mediaSession.metadata = new MediaMetadata({ title, artist, album, artwork });
+    try {
+      navigator.mediaSession.metadata = new MediaMetadata({ title, artist, album, artwork });
+    } catch (e) {
+      // Malformed artwork (e.g. an unreachable/failed image src) can throw
+      // rather than just being ignored on some browsers — retry once with
+      // no artwork at all so title/artist/album still show.
+      try { navigator.mediaSession.metadata = new MediaMetadata({ title, artist, album }); } catch (e2) {}
+    }
   }
+  // Tracks the real MIME type of the currently-shown art (set from the
+  // actual /api/art response headers below) instead of assuming image/png.
+  let realPlayerArtMime = null;
+  new MutationObserver(() => {
+    if (realPlayerArt.classList.contains('hidden') || !realPlayerArt.src) {
+      realPlayerArtMime = null;
+      updateMediaSessionMetadata();
+      return;
+    }
+    // Show the card immediately with title/artist/album (no artwork yet)
+    // rather than waiting on the HEAD request, then re-apply once the
+    // real MIME type is known so artwork isn't declared with a guessed,
+    // possibly-wrong type.
+    updateMediaSessionMetadata();
+    const src = realPlayerArt.src;
+    fetch(src, { method: 'HEAD' })
+      .then(r => { if (realPlayerArt.src === src) realPlayerArtMime = r.headers.get('Content-Type') || null; })
+      .catch(() => { realPlayerArtMime = null; })
+      .finally(() => { if (realPlayerArt.src === src) updateMediaSessionMetadata(); });
+  }).observe(realPlayerArt, { attributes: true, attributeFilter: ['class', 'src'] });
   new MutationObserver(updateMediaSessionMetadata).observe(realTrackName, { childList: true, characterData: true, subtree: true });
   new MutationObserver(updateMediaSessionMetadata).observe(realTrackPath, { childList: true, characterData: true, subtree: true });
-  new MutationObserver(updateMediaSessionMetadata).observe(realPlayerArt, { attributes: true, attributeFilter: ['class', 'src'] });
   new MutationObserver(updateMediaSessionMetadata).observe(playerBarEl, { attributes: true, attributeFilter: ['class'] });
   updateMediaSessionMetadata();
 
-  navigator.mediaSession.setActionHandler('play', () => { if (audioEl.paused) realPlayPauseBtn.click(); });
-  navigator.mediaSession.setActionHandler('pause', () => { if (!audioEl.paused) realPlayPauseBtn.click(); });
-  navigator.mediaSession.setActionHandler('previoustrack', () => realPrevBtn.click());
-  navigator.mediaSession.setActionHandler('nexttrack', () => realNextBtn.click());
-  navigator.mediaSession.setActionHandler('seekto', (details) => {
-    if (details.seekTime == null || !audioEl.duration) return;
-    audioEl.currentTime = details.seekTime;
-  });
-  try {
-    navigator.mediaSession.setActionHandler('seekbackward', (details) => {
-      audioEl.currentTime = Math.max(0, audioEl.currentTime - (details.seekOffset || 10));
-    });
-    navigator.mediaSession.setActionHandler('seekforward', (details) => {
-      if (!audioEl.duration) return;
-      audioEl.currentTime = Math.min(audioEl.duration, audioEl.currentTime + (details.seekOffset || 10));
-    });
-  } catch (e) {
-    // seekbackward/seekforward aren't supported everywhere — metadata and
-    // play/pause/next/prev above still work fine without them.
+  // Each action handler is registered independently so that one action
+  // being unsupported/throwing on a given browser (some throw a TypeError
+  // for actions they don't implement, rather than silently ignoring the
+  // call) can't prevent the rest from registering — previously an early
+  // throw here could silently skip previoustrack/nexttrack/seekto/position
+  // state entirely depending on registration order.
+  function trySetActionHandler(action, handler) {
+    try {
+      navigator.mediaSession.setActionHandler(action, handler);
+    } catch (e) {
+      // Not supported on this browser — skip it, everything else still registers.
+    }
   }
+  // Wrapped in a function and re-invoked on every 'play' event (not just
+  // once at page load) — this is specifically for iOS Safari, where the
+  // OS-level MediaRemote bridge that surfaces transport buttons on the
+  // lock screen has a long history of being selective (a well-documented
+  // WebKit/iOS limitation, not something fixable purely with correct
+  // registration code). This is cheap and idempotent, so re-running it
+  // every play is harmless even on platforms where it isn't needed.
+  //
+  // previoustrack/nexttrack vs seekbackward/seekforward: iOS's lock screen
+  // only shows one such button pair, and registering both apparently made
+  // it choose the generic ±seconds skip over track navigation. Track
+  // navigation is more useful for a music app, so seekbackward/seekforward
+  // are intentionally left unregistered here — 'seekto' (the scrubber) is
+  // a separate action and unaffected, so dragging the lock-screen progress
+  // bar still works either way.
+  function registerMediaSessionActionHandlers() {
+    trySetActionHandler('play', () => { if (audioEl.paused) realPlayPauseBtn.click(); });
+    trySetActionHandler('pause', () => { if (!audioEl.paused) realPlayPauseBtn.click(); });
+    trySetActionHandler('previoustrack', () => realPrevBtn.click());
+    trySetActionHandler('nexttrack', () => realNextBtn.click());
+    trySetActionHandler('seekto', (details) => {
+      if (details.seekTime == null || !audioEl.duration) return;
+      // Some platforms fire 'seekto' continuously while the user is still
+      // dragging the OS scrubber (details.seeking === true) rather than
+      // only on release — setting currentTime on every intermediate event
+      // is fine for a plain <audio> element (no extra buffering cost like
+      // <video>), so no special-casing needed there.
+      audioEl.currentTime = details.seekTime;
+    });
+  }
+  registerMediaSessionActionHandlers();
+  audioEl.addEventListener('play', registerMediaSessionActionHandlers);
 
   function updateMediaSessionPlaybackState() {
     navigator.mediaSession.playbackState = audioEl.paused ? 'paused' : 'playing';
@@ -751,27 +1009,95 @@ if ('mediaSession' in navigator) {
   audioEl.addEventListener('play', updateMediaSessionPlaybackState);
   audioEl.addEventListener('pause', updateMediaSessionPlaybackState);
 
-  // Position state drives the lock-screen scrubber and elapsed/remaining
-  // time — keeping it roughly in sync (not on every single timeupdate tick)
-  // is enough for a smooth-looking lock-screen progress bar.
+  // Position state (duration/position/playbackRate) is what drives iOS's
+  // lock-screen progress scrubber — but reporting it also makes iOS
+  // synthesize its own auto ±skip buttons in place of previoustrack/
+  // nexttrack, regardless of which action handlers are registered. Since
+  // track navigation matters more here than a seconds-based skip, this is
+  // intentionally left disabled. seekto (dragging the OS scrubber itself)
+  // is a separate action and still registered above — only the position
+  // *reporting* is off, not seeking.
+  const ENABLE_MEDIA_SESSION_POSITION_STATE = false;
   function updateMediaSessionPosition() {
-    if (!audioEl.duration || !isFinite(audioEl.duration)) return;
+    if (!ENABLE_MEDIA_SESSION_POSITION_STATE) return;
+    if (!audioEl.duration || !isFinite(audioEl.duration) || audioEl.duration <= 0) return;
     try {
       navigator.mediaSession.setPositionState({
         duration: audioEl.duration,
         playbackRate: audioEl.playbackRate || 1,
-        position: audioEl.currentTime,
+        // position must be < duration or the OS throws and rejects the
+        // whole call, which if it happened on every single timeupdate tick
+        // near the end of a track (or on a rounding edge) would mean the OS
+        // never received a single valid position/duration pair — and some
+        // platforms only enable a draggable scrubber once they have.
+        position: Math.min(audioEl.currentTime, audioEl.duration),
       });
     } catch (e) {
-      // setPositionState can throw if called with stale/inconsistent
-      // values during a track change race — safe to ignore, the next
-      // timeupdate tick corrects it.
+      // Stale/inconsistent values during a track-change race — safe to
+      // ignore, the next timeupdate tick corrects it.
     }
   }
   audioEl.addEventListener('loadedmetadata', updateMediaSessionPosition);
   audioEl.addEventListener('timeupdate', updateMediaSessionPosition);
   audioEl.addEventListener('ratechange', updateMediaSessionPosition);
+  audioEl.addEventListener('seeked', updateMediaSessionPosition);
 }
+
+// ---------------------------------------------------------------------------
+// PWA background/foreground lifecycle
+//
+// Backgrounding a standalone PWA (home-screen icon, not a browser tab) can
+// suspend timers and the ReplayGain AudioContext even while the underlying
+// <audio> element itself is allowed to keep playing for background audio.
+// Coming back from that state was causing three symptoms, all from the same
+// root cause — nothing ever re-synced app state with the real <audio>
+// element's state on return:
+//   1. The play button doing nothing: if replayGainEnabled is on, the OS
+//      suspends the AudioContext in the background; only a track change
+//      (via applyReplayGain) ever resumed it, not pressing play. Now
+//      safePlay() above handles the button-press case, and the resume
+//      handler below covers the "already playing, just reveal the UI"
+//      case.
+//   2. Old + new audio overlapping with a delay: on some browsers,
+//      returning to a backgrounded/frozen PWA fires 'pageshow' with
+//      event.persisted === true (a bfcache restore) while the previous
+//      in-memory <audio> element is still mid-playback. If any code
+//      responded to that resume by re-triggering playback (a fresh
+//      playCurrent()/play() call), it would start a second, independent
+//      playback on top of the first. The handler below deliberately never
+//      calls playCurrent() or changes audioEl.src on resume — it only
+//      resumes the audio graph and re-reads the existing element's actual
+//      state, so there is exactly one <audio> element and one playback
+//      instance at all times.
+//   3. Play/pause icon or Media Session state drifting from reality after
+//      background suspension paused things behind the UI's back.
+function resyncPlaybackOnForeground() {
+  if (audioCtx && audioCtx.state === 'suspended') {
+    audioCtx.resume().catch(() => {});
+  }
+  // Source of truth is always the real <audio> element's own paused state
+  // — never assume, never re-trigger playback here.
+  setPlayPauseIcon(!audioEl.paused);
+  if (typeof syncPlayPauseIcon === 'function') {
+    const fpBtn = document.getElementById('fpPlayPauseBtn');
+    const miniBtn = document.getElementById('miniPlayPauseBtn');
+    if (fpBtn) syncPlayPauseIcon(fpBtn);
+    if (miniBtn) syncPlayPauseIcon(miniBtn);
+  }
+  if ('mediaSession' in navigator) {
+    navigator.mediaSession.playbackState = audioEl.paused ? 'paused' : 'playing';
+  }
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') resyncPlaybackOnForeground();
+});
+// visibilitychange alone can be unreliable across bfcache restores on some
+// mobile browsers — 'pageshow' with persisted:true specifically indicates a
+// bfcache restore rather than a normal load, and needs the same resync
+// rather than any fresh-load logic.
+window.addEventListener('pageshow', (e) => {
+  if (e.persisted) resyncPlaybackOnForeground();
+});
 
 // ---------------------------------------------------------------------------
 // Mobile select mode: a Select button in the topbar toggles between normal

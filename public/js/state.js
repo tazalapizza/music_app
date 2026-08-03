@@ -99,7 +99,22 @@ function ensureAudioGraph() {
   gainNode = audioCtx.createGain();
   source.connect(gainNode).connect(audioCtx.destination);
 }
+// ReplayGain is temporarily disabled on mobile: it requires permanently
+// rerouting audio through a WebAudio graph (see createMediaElementSource
+// below), and mobile OSes suspend/kill WebAudio-routed audio far more
+// aggressively than a plain <audio> element in the background — this was
+// causing unreliable background playback and a stuck-audio-loop bug on
+// resume. The setting/UI and all the graph code are left intact; this is
+// the single choke point every call site (playback.js, settings-auth-
+// toast-lyrics.js) goes through, so gating it here disables ReplayGain
+// everywhere on mobile without touching anything else. Revisit once the
+// WebAudio graph is made robust to backgrounding (rebuild-on-resume, etc).
+const REPLAYGAIN_MOBILE_QUERY = window.matchMedia('(max-width: 780px)');
 function applyReplayGain(db) {
+  if (REPLAYGAIN_MOBILE_QUERY.matches) {
+    if (gainNode) gainNode.gain.value = 1;
+    return;
+  }
   if (!settings.replayGainEnabled) {
     if (gainNode) gainNode.gain.value = 1;
     return;

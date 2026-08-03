@@ -46,3 +46,14 @@
 }
 @media (hover: hover) { .settings-row-buttons button:hover { background: #35353a; } }
 .settings-row-buttons button:disabled { opacity: 0.6; cursor: default; }
+
+/* Shown only on mobile (see responsive.css) under the ReplayGain checkbox,
+   explaining why it's disabled there — see state.js REPLAYGAIN_MOBILE_QUERY. */
+.settings-row-hint {
+  display: none;
+  font-size: 11px;
+  color: #9a9aa0;
+  padding: 0 0 10px;
+  margin-top: -6px;
+  line-height: 1.4;
+}

@@ -14,8 +14,17 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   background: #121214;
   color: #e8e8ea;
+  /* 100dvh intentionally NOT used here (and no longer overrides 100vh
+     below) — per the documented iOS PWA cold-start bug: on standalone
+     launch, 100dvh can report a stale/short value until a geometry change
+     (rotation) forces WebKit to recompute it, which is exactly the
+     "gap between the nav bar and the bottom of the screen" symptom this
+     was causing. 100vh is the value that's reliably correct from cold
+     start in standalone mode (see responsive.css's mobile override and
+     layout-init.js's viewport recheck for the full explanation/fallback
+     chain). Desktop/non-PWA browser quirks around 100vh (toolbar height)
+     don't apply here since standalone mode has no toolbar. */
   height: 100vh;
-  height: 100dvh;
   overflow: hidden;
 }
 :root {

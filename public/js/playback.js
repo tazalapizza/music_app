@@ -199,16 +199,14 @@ function playCurrent() {
   showPlayerBar();
   const nameEl = document.getElementById('trackName');
   const pathEl = document.getElementById('trackPath');
-  nameEl.querySelector('span').textContent = track.name;
-  pathEl.querySelector('span').textContent = track.path;
-  startMarquee(nameEl.querySelector('span'), pathEl.querySelector('span'));
-  updatePlayerArt(track.path);
-  updatePlayingHighlight();
-  loadLyricsForTrack(track.path);
-  getMeta(track.path).then(meta => {
-    if (meta.title) {
-      nameEl.querySelector('span').textContent = meta.title;
-    }
+
+  // Applies resolved metadata (title + "Artist • Album" pb-link spans) to
+  // the name/path elements, then (re)starts the marquee against whatever
+  // text ended up in place. Shared between the cached-synchronous path and
+  // the getMeta().then() path below so the DOM-building logic (and the
+  // marquee timing relative to it) isn't duplicated or drifted apart.
+  function applyMeta(meta) {
+    nameEl.querySelector('span').textContent = meta.title || track.name;
     const pathSpan = pathEl.querySelector('span');
     if (meta.artist || meta.album) {
       pathSpan.innerHTML = '';
@@ -227,8 +225,32 @@ function playCurrent() {
         al.addEventListener('click', () => openLibrary('album', meta.album));
         pathSpan.appendChild(al);
       }
+    } else {
+      pathSpan.textContent = track.path;
     }
     startMarquee(nameEl.querySelector('span'), pathSpan);
+  }
+
+  // Metadata for this track may already be cached (re-visiting a track,
+  // a folder that already prefetched metadata, or switching tracks fast
+  // enough that a previous getMeta() call already populated it) — in that
+  // case apply the real title/artist/album immediately instead of first
+  // showing the raw filename and swapping it out a moment later, which is
+  // what caused a visible flash/flicker when skipping tracks quickly.
+  // Only fall back to the filename placeholder when nothing is cached yet.
+  const cachedMeta = metaCache[track.path];
+  if (cachedMeta) {
+    applyMeta(cachedMeta);
+  } else {
+    nameEl.querySelector('span').textContent = track.name;
+    pathEl.querySelector('span').textContent = track.path;
+    startMarquee(nameEl.querySelector('span'), pathEl.querySelector('span'));
+  }
+  updatePlayerArt(track.path);
+  updatePlayingHighlight();
+  loadLyricsForTrack(track.path);
+  getMeta(track.path).then(meta => {
+    applyMeta(meta);
     applyReplayGain(meta.replayGainDb);
   });
   setPlayPauseIcon(true);
@@ -705,19 +727,35 @@ document.getElementById('playPauseBtn').addEventListener('click', () => {
       playCurrent();
     } else {
       audioEl.currentTime = 0;
-      audioEl.play();
-      setPlayPauseIcon(true);
+      safePlay();
     }
     return;
   }
   if (audioEl.paused) {
-    audioEl.play();
-    setPlayPauseIcon(true);
+    safePlay();
   } else {
     audioEl.pause();
     setPlayPauseIcon(false);
   }
 });
+
+// Wraps audioEl.play() so the icon only flips to "playing" once playback
+// has actually started, and so a suspended ReplayGain AudioContext (the
+// PWA-background culprit — see the visibility/pageshow handling further
+// down) gets resumed first. Without this, coming back from background with
+// replayGainEnabled on left the context suspended, so .play() would
+// silently produce no audio while the icon claimed it was playing.
+function safePlay() {
+  if (audioCtx && audioCtx.state === 'suspended') {
+    audioCtx.resume().catch(() => {});
+  }
+  const p = audioEl.play();
+  if (p && typeof p.then === 'function') {
+    p.then(() => setPlayPauseIcon(true)).catch(() => setPlayPauseIcon(false));
+  } else {
+    setPlayPauseIcon(true);
+  }
+}
 
 document.getElementById('nextBtn').addEventListener('click', playNext);
 document.getElementById('prevBtn').addEventListener('click', playPrev);
