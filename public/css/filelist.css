@@ -1,0 +1,310 @@
+/* ---------------------------------------------------------------------------
+   filelist.css — Main content area, library banner (artist/album view),
+   album strip/cards, file list header + sortable columns + resize handles,
+   and individual file rows.
+   --------------------------------------------------------------------------- */
+
+.content {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+.file-list-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+  --col-icon-w: 34px;
+  --col-title-w: 200px;
+  --col-artist-w: 160px;
+  --col-album-w: 160px;
+  --col-duration-w: 70px;
+  --col-size-w: 70px;
+  --grid-template: var(--col-icon-w) minmax(0, 1fr) var(--col-title-w) var(--col-artist-w) var(--col-album-w) var(--col-duration-w) var(--col-size-w);
+}
+.file-list-wrap.search-mode {
+  --grid-template: var(--col-icon-w) minmax(0, 1fr) var(--col-title-w) var(--col-artist-w) var(--col-album-w) var(--col-duration-w) var(--col-size-w) 32px;
+}
+.file-list-wrap.album-view {
+  --grid-template: 36px var(--col-icon-w) minmax(0, 1fr) var(--col-title-w) var(--col-artist-w) var(--col-album-w) var(--col-duration-w) var(--col-size-w) 32px;
+}
+.col-track, .file-track { display: none; }
+.file-list-wrap.album-view .col-track,
+.file-list-wrap.album-view .file-track { display: flex; align-items: center; justify-content: center; }
+.col-track { color: #77777d; font-size: 12px; }
+.file-track { color: #77777d; font-size: 13px; }
+.library-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 16px;
+  border-bottom: 1px solid #2a2a2e;
+  background: #17171a;
+  flex-shrink: 0;
+}
+.library-banner.hidden { display: none; }
+.lib-art {
+  width: 110px;
+  height: 110px;
+  border-radius: 8px;
+  object-fit: cover;
+  background: #2a2a2e;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+.lib-art-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 32px;
+  opacity: 0.5;
+  background: #2a2a2e;
+  border-radius: 8px;
+}
+.lib-info { min-width: 0; flex: 1; }
+.lib-name { font-size: 20px; font-weight: 700; margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-name-row { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+.lib-name-row .lib-name { margin-bottom: 0; }
+.lib-play-all-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  background: #2a2a2e;
+  border: none;
+  color: #e8e8ea;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+@media (hover: hover) { .lib-play-all-btn:hover { background: #35353a; } }
+.disc-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 12px 6px;
+}
+.disc-header-label { font-size: 12px; color: #77777d; font-weight: 600; flex-shrink: 0; white-space: nowrap; }
+.disc-header-line { flex: 1; height: 1px; background: #2a2a2e; }
+.lib-meta { font-size: 13px; color: #a8a8ae; margin-bottom: 4px; }
+.lib-stats { font-size: 12px; color: #77777d; }
+.lib-link { cursor: pointer; }
+@media (hover: hover) { .lib-link:hover { text-decoration: underline; } }
+.album-strip, .tab-panel, .upload-list {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.album-strip.scrollbar-active, .tab-panel.scrollbar-active, .upload-list.scrollbar-active {
+  scrollbar-color: #35353a transparent;
+}
+.album-strip::-webkit-scrollbar,
+.tab-panel::-webkit-scrollbar, .upload-list::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.album-strip::-webkit-scrollbar-track,
+.tab-panel::-webkit-scrollbar-track, .upload-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+.album-strip::-webkit-scrollbar-thumb,
+.tab-panel::-webkit-scrollbar-thumb, .upload-list::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 3px;
+}
+.album-strip.scrollbar-active::-webkit-scrollbar-thumb,
+.tab-panel.scrollbar-active::-webkit-scrollbar-thumb, .upload-list.scrollbar-active::-webkit-scrollbar-thumb {
+  background: #35353a;
+}
+.album-strip::-webkit-scrollbar-thumb:hover,
+.tab-panel::-webkit-scrollbar-thumb:hover, .upload-list::-webkit-scrollbar-thumb:hover {
+  background: #454549;
+}
+
+.album-strip {
+  display: flex;
+  gap: 14px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* Without an explicit touch-action, a vertical swipe starting on this
+     strip can be interpreted as vertically scrolling it (in addition to,
+     or instead of, the page underneath) — pan-x tells the browser's touch
+     gesture recognizer this element only responds to horizontal panning,
+     so a vertical swipe passes through to the page scroll as intended. */
+  touch-action: pan-x;
+  margin-top: 12px;
+  padding-bottom: 10px;
+}
+.album-card { width: 110px; flex-shrink: 0; cursor: pointer; }
+.album-card-art {
+  width: 110px;
+  height: 110px;
+  border-radius: 8px;
+  object-fit: cover;
+  background: #2a2a2e;
+  overflow: hidden;
+}
+@media (hover: hover) { .album-card:hover .album-card-name { text-decoration: underline; } }
+.album-card-name { font-size: 13px; margin-top: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.album-card-year { font-size: 11px; color: #77777d; }
+.link-cell { cursor: pointer; }
+@media (hover: hover) { .link-cell:hover { text-decoration: underline; } }
+.pb-link { cursor: pointer; }
+@media (hover: hover) { .pb-link:hover { text-decoration: underline; } }
+.crumb-current { color: #e8e8ea; font-weight: 600; }
+
+.file-list-header {
+  display: grid;
+  grid-template-columns: var(--grid-template);
+  column-gap: 10px;
+  align-items: center;
+  padding: 6px 8px 6px 12px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #77777d;
+  border-bottom: 1px solid #2a2a2e;
+  flex-shrink: 0;
+}
+.file-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 0;
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.file-list.scrollbar-active { scrollbar-color: #35353a transparent; }
+.file-list.scrollbar-active::-webkit-scrollbar-thumb { background: #35353a; }
+.file-list::-webkit-scrollbar { width: 6px; height: 6px; }
+.file-list::-webkit-scrollbar-track { background: transparent; }
+.file-list::-webkit-scrollbar-thumb { background: transparent; border-radius: 3px; }
+.file-list::-webkit-scrollbar-thumb:hover { background: #454549; }
+.load-more-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  margin-top: 4px;
+  padding: 10px;
+  background: #1e1e22;
+  border: 1px dashed #35353a;
+  border-radius: 6px;
+  color: #a8a8ae;
+  font-size: 13px;
+  cursor: pointer;
+}
+@media (hover: hover) { .load-more-btn:hover { background: #26262a; color: #e8e8ea; border-color: var(--accent-color); } }
+.load-more-arrow { font-size: 11px; }
+.file-row {
+  display: grid;
+  grid-template-columns: var(--grid-template);
+  column-gap: 10px;
+  align-items: center;
+  padding: 8px 8px 8px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  user-select: none;
+  border-bottom: 1px solid #202024;
+}
+/* Scoped to real hover-capable input (mouse/trackpad) rather than left
+   unconditional: iOS Safari's "first tap only satisfies :hover, second tap
+   fires click" behavior triggers on the mere presence of a MATCHING :hover
+   rule for an element, independent of whether that rule has any visible
+   effect — so previously overriding these to be inert on touch (see
+   responsive.css) wasn't enough; the rule still matched and still
+   triggered the two-tap requirement. Wrapping the rule itself in
+   (hover: hover) means it doesn't exist in the cascade at all on touch,
+   which is what actually avoids the two-tap behavior. */
+@media (hover: hover) {
+  .file-row:hover { background: #1e1e22; }
+  .file-row.selected:hover { background: color-mix(in srgb, var(--accent-color) 24%, transparent); }
+  .file-row:hover .folder-icon-wrap { background: color-mix(in srgb, var(--accent-color) 16%, transparent); }
+  .file-row:hover .folder-icon-default { opacity: 0; }
+  .file-row:hover .folder-icon-play-btn { opacity: 1; }
+}
+.file-row.playing { background: color-mix(in srgb, var(--accent-color) 22%, #1a1a1d); }
+.file-row.selected { background: color-mix(in srgb, var(--accent-color) 16%, transparent); box-shadow: inset 2px 0 0 var(--accent-color); }
+.file-icon { opacity: 0.8; display: flex; align-items: center; justify-content: center; }
+.folder-icon-wrap { position: relative; border-radius: 4px; }
+.folder-icon-default { display: inline-flex; align-items: center; justify-content: center; transition: opacity 0.1s; color: var(--accent-color); }
+.folder-icon-play-btn {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--accent-color);
+  font-size: 12px;
+  opacity: 0;
+  cursor: pointer;
+  padding: 0;
+}
+.file-art {
+  width: 28px; height: 28px; border-radius: 4px;
+  object-fit: cover; background: #2a2a2e;
+  justify-self: center;
+}
+.col-icon { }
+.col-name { text-align: left; }
+.sortable { cursor: pointer; user-select: none; }
+@media (hover: hover) { .sortable:hover { color: #c8c8ce; } }
+.sort-arrow { display: inline-block; font-size: 10px; margin-left: 5px; }
+.sort-arrow.hidden { display: none; }
+.col-title, .col-artist, .col-album, .col-duration, .col-size {
+  position: relative;
+  display: flex;
+  justify-content: center;
+}
+/* Resize handles live only inside header cells — separator lines never render in data rows */
+.col-resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -5px;
+  width: 10px;
+  cursor: col-resize;
+  z-index: 2;
+}
+.col-resize-handle::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: #2a2a2e;
+  transform: translateX(-50%);
+}
+.col-resize-handle:hover::after,
+.col-resize-handle.resizing::after {
+  background: var(--accent-color);
+  width: 2px;
+}
+
+.file-name-wrap { overflow: hidden; min-width: 0; }
+.file-name { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.folder-counts { font-size: 11px; color: #77777d; margin-top: 2px; }
+.file-title, .file-artist, .file-album, .file-duration, .file-size {
+  display: flex;
+  justify-content: center;
+  overflow: hidden;
+}
+.file-title { font-size: 13px; }
+.file-artist { font-size: 13px; }
+.file-album { font-size: 13px; }
+.file-duration { font-size: 13px; color: #77777d; }
+.file-size { font-size: 12px; color: #77777d; }
+.cell-text { display: inline-block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.file-list-header .cell-text { margin-right: -0.04em; }
+.row-open-folder-btn {
+  text-align: center;
+  background: none; border: none; color: #e8e8ea; font-size: 14px; cursor: pointer; opacity: 0.6;
+}
+@media (hover: hover) { .row-open-folder-btn:hover { opacity: 1; } }
+.row-open-folder-btn svg, #openFolderBtn svg, #deleteTrackBtn svg { vertical-align: middle; }

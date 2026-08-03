@@ -1,0 +1,243 @@
+/* ---------------------------------------------------------------------------
+   player.css — Player bar: blurred background mosaic canvas, now-playing
+   art/text/marquee, transport controls, speed menu, seek/volume sliders.
+   --------------------------------------------------------------------------- */
+
+#playerBar > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* Global variables to control the background from JS.
+   --blur-color-1..4 are dominant colors extracted from the current album art. */
+.player-bar {
+  display: flex;
+  align-items: center;
+  padding: 10px 16px;
+  flex-shrink: 0;
+  gap: 20px;
+}
+.player-bar.hidden { display: none; }
+
+.player-blur-group {
+  position: relative;
+  flex-shrink: 0;
+}
+.player-blur-clip {
+  /* This wrapper exists purely to clip .player-blur-bg's filter bleed.
+     filter is applied to an element's already-composited output and is NOT
+     contained by that same element's own overflow (overflow only clips a
+     node's children before the filter runs) - it IS contained by an
+     ancestor's overflow, which is why the clipping has to live one level
+     up rather than on .player-blur-bg itself. Keeping it as its own
+     unfiltered wrapper (rather than putting overflow:hidden on
+     .player-blur-group) also means it doesn't clip other siblings inside
+     .player-blur-group, like .lyrics-toggle-btn, which deliberately pokes
+     up above the panel's own top edge. */
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  z-index: 0;
+  pointer-events: none;
+}
+.player-blur-bg {
+  position: absolute;
+  /* Positioned/sized in JS (see drawBlurBackground in app.js), matching the
+     canvas exactly - NOT inset:0. See the long comment below for why. */
+  overflow: hidden;
+  pointer-events: none;
+  background: #121214;
+  /* Canvas draws organic, irregular blob shapes in JS (see drawBlurBackground
+     in app.js) instead of CSS gradients. Circles/ellipses/linear gradients
+     all have some notion of "radius" or "line length" that has to be sized
+     against this container's own box, and this container is consistently
+     very wide and comparatively short - every shape-based CSS approach
+     ended up mismatched against that aspect ratio one way or another.
+     Drawing directly onto a canvas sized in real pixels sidesteps that
+     entirely: shapes are positioned and sized in absolute canvas
+     coordinates, so there's no percentage-of-box math to distort.
+
+     THIS ELEMENT ITSELF is also given the same overscan margin and fixed
+     maximum-height sizing as its canvas child, rather than inset:0 to
+     .player-blur-group. Verified via devtools (computed height 182px when
+     the lyrics panel was open vs 62px closed) that the raw canvas pixels
+     were byte-for-byte identical in both states, yet the panel looked
+     visibly darker closed - because overflow:hidden on THIS element was
+     clipping the oversized canvas down to this element's own short box
+     BEFORE filter: blur(50px) ran on it. A 50px blur radius against a
+     62px-tall box is a much larger fraction of that box than against a
+     182px-tall one, so identical content produced a more heavily
+     edge-darkened result purely because the filtered element itself was
+     short - this reproduces in both Chromium and Firefox, it's standard
+     filter behavior, not a rendering bug in either engine. Giving this
+     element the same fixed-tall, overscan-padded treatment as the canvas
+     means the filter always operates on a large, constant-size box
+     regardless of which slice is currently visible - .player-blur-clip
+     (the actual outer wrapper, unfiltered) is what reveals only the
+     current visible slice via its own overflow:hidden, exactly as it
+     already did for the canvas. */
+  filter: blur(50px) saturate(1.3) brightness(0.55);
+  opacity: var(--blur-opacity);
+  transition: opacity 0.5s ease-in-out;
+}
+#playerBlurCanvas {
+  position: absolute;
+  pointer-events: none;
+}
+/* Single source of truth for stacking order of everything above the blur layer */
+.player-blur-group > *:not(.player-blur-clip) {
+  position: relative;
+  z-index: 1;
+  background-color: transparent;
+}
+.now-playing {
+  width: 280px;
+  flex-shrink: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.player-art, .player-art-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+.player-art { object-fit: cover; background: #2a2a2e; }
+.player-art.hidden { display: none; }
+.player-art-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #2a2a2e;
+  font-size: 18px;
+  opacity: 0.7;
+}
+.player-art-icon.hidden { display: none; }
+.now-playing-text { overflow: hidden; min-width: 0; }
+.marquee-wrap { overflow: hidden; white-space: nowrap; position: relative; }
+.track-name { font-size: 13px; font-weight: 600; display: inline-block; }
+.track-path { font-size: 11px; color: #c8c8ce; display: inline-block; }
+.track-name span, .track-path span { display: inline-block; will-change: transform; }
+#muteIconOn.hidden, #muteIconOff.hidden { display: none; }
+#closePlayerBtn { margin-left: 4px; }
+.player-controls { flex: 1; display: flex; align-items: center; gap: 10px; }
+.player-controls button {
+  background: none;
+  border: none;
+  color: #e8e8ea;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 4px;
+  border-radius: 4px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+.player-controls button svg { vertical-align: middle; display: inline-block; }
+@media (hover: hover) { .player-controls button:hover { background: #2a2a2e; } }
+.player-controls button.active-state {
+  color: #12121e;
+  background: var(--accent-color);
+}
+@media (hover: hover) { .player-controls button.active-state:hover { filter: brightness(1.15); } }
+#playPauseBtn { width: 28px; }
+#playPauseBtn .icon-play.hidden,
+#playPauseBtn .icon-pause.hidden { display: none; }
+#loopBtn { width: 48px; }
+.loop-label { font-size: 10px; font-weight: 700; margin-left: 2px; vertical-align: 1px; }
+#speedBtn { font-size: 12px; font-weight: 600; width: 36px; }
+.speed-wrap { position: relative; display: inline-flex; }
+.speed-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: #26262a;
+  border: 1px solid #35353a;
+  border-radius: 8px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 100;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+}
+.speed-menu.hidden { display: none; }
+.speed-menu button {
+  background: none;
+  border: none;
+  color: #e8e8ea;
+  padding: 6px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  white-space: nowrap;
+  text-align: center;
+}
+@media (hover: hover) { .speed-menu button:hover { background: #35353a; } }
+.speed-menu button.active { color: var(--accent-color); font-weight: 700; }
+.time { font-size: 12px; color: #a8a8ae; min-width: 112px; display: inline-flex; align-items: center; height: 28px; font-variant-numeric: tabular-nums; }
+#seekBar {
+  flex: 1;
+  min-width: 60px;
+  --played-pct: 0%;
+  --buffered-pct: 0%;
+  background: linear-gradient(to right,
+    var(--accent-color) 0%, var(--accent-color) var(--played-pct),
+    rgba(255,255,255,0.22) var(--played-pct), rgba(255,255,255,0.22) var(--buffered-pct),
+    #35353a var(--buffered-pct), #35353a 100%);
+}
+#volumeBar {
+  width: 80px;
+  --volume-pct: 0%;
+  background: linear-gradient(to right, var(--accent-color) 0%, var(--accent-color) var(--volume-pct), #35353a var(--volume-pct), #35353a 100%);
+}
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  background: #35353a;
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  background: transparent;
+  border-radius: 2px;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--accent-color);
+  margin-top: -4px;
+  cursor: pointer;
+}
+input[type="range"]::-moz-range-track {
+  height: 4px;
+  background: transparent;
+  border-radius: 2px;
+}
+input[type="range"]::-moz-range-progress {
+  height: 4px;
+  background: var(--accent-color);
+  border-radius: 2px;
+}
+input[type="range"]::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent-color);
+  cursor: pointer;
+}
+#seekBar::-webkit-slider-thumb, #volumeBar::-webkit-slider-thumb { background: var(--accent-color); }
+#seekBar::-moz-range-progress, #volumeBar::-moz-range-progress { background: var(--accent-color); }
+#seekBar::-moz-range-thumb, #volumeBar::-moz-range-thumb { background: var(--accent-color); }

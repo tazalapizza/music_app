@@ -1,0 +1,24 @@
+/* ---------------------------------------------------------------------------
+   toast.css — Bottom toast notification.
+   --------------------------------------------------------------------------- */
+
+.toast {
+  position: fixed;
+  bottom: 90px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #26262a;
+  border: 1px solid #35353a;
+  color: #e8e8ea;
+  padding: 10px 18px;
+  border-radius: 8px;
+  font-size: 13px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+  z-index: 300;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+.toast.show { opacity: 1; }
+
+/* Ensure ALL child elements (buttons, text, seekbar) sit above the background */

@@ -1,0 +1,150 @@
+/* ---------------------------------------------------------------------------
+   base.css — Global reset, html/body, and :root CSS custom properties
+   (--blur-color-*, --blur-opacity, --accent-color) set from JS.
+   Load FIRST: other files rely on the box-sizing reset and these variables.
+   --------------------------------------------------------------------------- */
+
+* { box-sizing: border-box; }
+html {
+  height: 100%;
+  overflow: hidden;
+}
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #121214;
+  color: #e8e8ea;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+}
+:root {
+  --blur-color-1: #2a2a2e;
+  --blur-color-2: #2a2a2e;
+  --blur-color-3: #2a2a2e;
+  --blur-color-4: #2a2a2e;
+  --blur-opacity: 0;
+  --accent-color: #e8e8ea;
+  --bottom-nav-h: 0px;
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-top: env(safe-area-inset-top, 0px);
+}
+/* Prevent double-tap zoom / tap highlight so the UI reads as an app,
+   not a webpage. Text stays selectable where it already was (inputs,
+   textareas), everything else opts out of the browser's touch chrome. */
+* { -webkit-tap-highlight-color: transparent; }
+button, .file-row, .queue-item, .playlist-item, .tab-btn, .bottom-nav-btn,
+.crumb-label, .album-card, a { touch-action: manipulation; }
+
+/* ---------------------------------------------------------------------------
+   Minimal text input / textarea style — shared, global base. Previously
+   there was no single foundation: .modal input and .search-input each had
+   their own visible bordered-box look, and other fields (the entire
+   metadata editor, for one) had no styling at all and rendered as raw,
+   unstyled browser defaults. This is the one shared minimal look the whole
+   app now builds on: no border/box at rest, a background only barely
+   distinct from the surrounding surface, and just a thin bottom line that
+   brightens to the accent color on focus — nothing to look at until you
+   actually interact with a field. Per-context files (topbar.css,
+   context-menu-modal.css, metadata-editor.css, settings.css) may still set
+   layout (width, margin, font-size) but no longer need to (and mostly no
+   longer do) redeclare the visual appearance itself.
+   --------------------------------------------------------------------------- */
+input[type="text"],
+input[type="number"],
+input[type="search"],
+input[type="email"],
+input[type="password"],
+textarea {
+  background: rgba(255, 255, 255, 0.03);
+  border: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 4px 4px 0 0;
+  color: #e8e8ea;
+  padding: 6px 8px;
+  outline: none;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+input[type="text"]:focus,
+input[type="number"]:focus,
+input[type="search"]:focus,
+input[type="email"]:focus,
+input[type="password"]:focus,
+textarea:focus {
+  border-bottom-color: var(--accent-color);
+  background: rgba(255, 255, 255, 0.05);
+}
+input[type="text"]::placeholder,
+input[type="number"]::placeholder,
+input[type="search"]::placeholder,
+textarea::placeholder {
+  color: #6a6a70;
+}
+/* Native spinner arrows on number inputs looked visually inconsistent
+   against the app's minimal style — removed rather than restyled, since
+   they're notoriously unreliable to reskin consistently across browsers.
+   Typing a value or using the up/down arrow keys still works exactly the
+   same; only the visible clickable arrows are gone. */
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
+}
+
+/* Minimal checkbox: same resting background as text inputs, a faint
+   accent-tinted border (brightening on hover/focus), and an accent-
+   colored checkmark — nothing fills solid, staying consistent with the
+   "outline + color accent" look used everywhere else rather than a
+   filled block. */
+input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid color-mix(in srgb, var(--accent-color) 45%, transparent);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+  position: relative;
+  vertical-align: middle;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+input[type="checkbox"]:hover { border-color: color-mix(in srgb, var(--accent-color) 70%, transparent); }
+input[type="checkbox"]:checked {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--accent-color);
+}
+input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute;
+  /* The checkmark's rotated 4x8 box isn't visually centered within itself
+     — the corner (the actual visual "point" of the check) sits toward the
+     bottom-left of that box, so centering the box geometrically in the
+     16px checkbox would look off-center to the eye. Nudged right/up from
+     true geometric center to compensate. */
+  left: 5px;
+  top: 2.5px;
+  width: 4px;
+  height: 7px;
+  border: solid var(--accent-color);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+input[type="checkbox"]:indeterminate {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--accent-color);
+}
+input[type="checkbox"]:indeterminate::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 7px;
+  width: 8px;
+  height: 2px;
+  background: var(--accent-color);
+}

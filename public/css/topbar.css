@@ -1,0 +1,137 @@
+/* ---------------------------------------------------------------------------
+   topbar.css — Top bar: breadcrumb, search box + scope toggle, auth button,
+   upload button badge, login modal error text.
+   --------------------------------------------------------------------------- */
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+}
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  padding-top: calc(12px + var(--safe-top, 0px));
+  background: #1a1a1d;
+  border-bottom: 1px solid #2a2a2e;
+  flex-shrink: 0;
+}
+.path-breadcrumb {
+  font-size: 14px;
+  color: #a8a8ae;
+  overflow-x: auto;
+  overflow-y: hidden;
+  touch-action: pan-x;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  flex-shrink: 1;
+  min-width: 0;
+}
+.search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  margin: 0 16px;
+}
+.search-input {
+  width: 220px;
+  padding: 6px 28px 6px 10px;
+  font-size: 13px;
+}
+.search-clear {
+  position: absolute;
+  right: 6px;
+  background: none;
+  border: none;
+  color: #a8a8ae;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+@media (hover: hover) { .search-clear:hover { background: #35353a; color: #e8e8ea; } }
+.search-clear.hidden { display: none; }
+.search-scope-btn {
+  margin-right: 6px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #232326;
+  border: 1px solid #35353a;
+  color: #a8a8ae;
+  cursor: pointer;
+  padding: 6px 8px;
+  border-radius: 6px;
+}
+@media (hover: hover) { .search-scope-btn:hover { background: #2a2a2e; color: #e8e8ea; } }
+.search-scope-btn.active {
+  background: var(--accent-color);
+  border-color: var(--accent-color);
+  color: #12121e;
+}
+.crumb-item { display: inline-flex; align-items: center; gap: 4px; }
+.crumb-sep { color: #77777d; margin: 0 2px; }
+.crumb-label {
+  cursor: pointer;
+  color: var(--accent-color);
+}
+@media (hover: hover) { .crumb-label:hover { text-decoration: underline; } }
+.crumb-play-btn {
+  background: none;
+  border: none;
+  color: #e8e8ea;
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0.7;
+  padding: 2px 4px;
+  border-radius: 4px;
+  line-height: 1;
+}
+@media (hover: hover) { .crumb-play-btn:hover { opacity: 1; background: #2a2a2e; } }
+.topbar-actions {
+  display: flex;
+  align-items: center;
+}
+.topbar-actions button {
+  background: #2a2a2e;
+  border: none;
+  color: #e8e8ea;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  margin-left: 8px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+@media (hover: hover) { .topbar-actions button:hover { background: #35353a; } }
+#authBtn.logged-in { background: color-mix(in srgb, var(--accent-color) 18%, transparent); color: color-mix(in srgb, var(--accent-color) 70%, white); }
+@media (hover: hover) { #authBtn.logged-in:hover { background: color-mix(in srgb, var(--accent-color) 28%, transparent); } }
+.login-error {
+  color: #ff8080;
+  font-size: 12px;
+  margin: -4px 0 8px;
+}
+.login-error.hidden { display: none; }
+.login-title { text-align: center; font-weight: 600; margin-bottom: 8px; }
+.upload-wrap { position: relative; display: inline-block; }
+#uploadBtn.uploading {
+  background: var(--accent-color);
+  color: #12121e;
+  font-weight: 700;
+  animation: upload-pulse 1.4s ease-in-out infinite;
+}
+@keyframes upload-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent-color) 50%, transparent); }
+  50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent-color) 0%, transparent); }
+}

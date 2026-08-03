@@ -1,0 +1,180 @@
+/* ---------------------------------------------------------------------------
+   metadata-editor.css — Metadata editor modal: header/file nav, album art
+   panel (preview/split/browse/broadcast), tag fields + dropdowns, and the
+   lyrics textarea + actions within the modal.
+   --------------------------------------------------------------------------- */
+
+.meta-modal { width: 520px; }
+.meta-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.meta-group-toggle { font-size: 13px; display: flex; align-items: center; gap: 6px; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
+.meta-file-counter { font-size: 12px; color: #c8c8ce; margin-left: auto; white-space: nowrap; }
+.meta-file-nav { display: flex; align-items: center; gap: 6px; }
+.meta-file-nav input { flex: 1; margin: 0; }
+.meta-file-nav button {
+  background: #2a2a2e; border: none; color: #e8e8ea;
+  padding: 6px 10px; border-radius: 6px; cursor: pointer; flex-shrink: 0;
+}
+@media (hover: hover) { .meta-file-nav button:hover { background: #35353a; } }
+.meta-body { display: flex; align-items: flex-start; gap: 14px; margin-top: 12px; }
+.meta-art-panel { width: 130px; flex-shrink: 0; display: flex; flex-direction: column; align-items: center; gap: 8px; position: relative; }
+.meta-art-preview { width: 120px; height: 120px; position: relative; }
+.meta-art { width: 120px; height: 120px; border-radius: 8px; object-fit: cover; background: #2a2a2e; }
+.meta-art.hidden { display: none; }
+.meta-art-placeholder {
+  width: 120px; height: 120px; border-radius: 8px; background: #2a2a2e;
+  display: flex; align-items: center; justify-content: center; opacity: 0.5;
+}
+.meta-art-placeholder svg { width: 28px; height: 28px; }
+.meta-art-placeholder.hidden { display: none; }
+.meta-art-split {
+  width: 120px; height: 120px;
+  display: flex;
+  gap: 2px;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.meta-art-split.hidden { display: none; }
+.meta-art-split-half {
+  flex: 1;
+  min-width: 0;
+  height: 120px;
+  position: relative;
+  background: #2a2a2e;
+}
+.meta-art-split-half img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.meta-art-split-half .meta-art-placeholder { width: 100%; height: 100%; border-radius: 0; }
+.meta-art-split-half .meta-art-placeholder svg { width: 20px; height: 20px; }
+.meta-art-split-half:not(.meta-art-split-new) img,
+.meta-art-split-half:not(.meta-art-split-new) .meta-art-placeholder {
+  filter: grayscale(100%) brightness(0.7);
+}
+.meta-art-actions { display: flex; gap: 4px; }
+.meta-art-actions button {
+  background: #2a2a2e; border: none; color: #e8e8ea;
+  padding: 4px 8px; border-radius: 5px; cursor: pointer; font-size: 11px;
+}
+@media (hover: hover) { .meta-art-actions button:hover { background: #35353a; } }
+.meta-art-actions button:disabled { opacity: 0.4; cursor: default; pointer-events: none; }
+.meta-art-status { font-size: 11px; color: var(--accent-color); text-align: center; min-height: 14px; }
+.meta-art-changed-count { font-size: 11px; color: #a8a8ae; text-align: center; min-height: 14px; }
+.meta-art-broadcast {
+  font-size: 11px;
+  color: #a8a8ae;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.meta-art-broadcast input { margin: 0; }
+.meta-art-broadcast.hidden { display: none; }
+.meta-art-nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.meta-art-nav button {
+  background: #2a2a2e;
+  border: none;
+  color: #e8e8ea;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+@media (hover: hover) { .meta-art-nav button:hover { background: #35353a; } }
+.meta-art-nav.hidden { display: none; }
+.meta-art-index { font-size: 12px; color: #c8c8ce; min-width: 32px; text-align: center; }
+.meta-fields { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.meta-row { display: flex; align-items: center; gap: 8px; min-height: 30px; }
+.meta-row.hidden { display: none; }
+.meta-row label { width: 60px; flex-shrink: 0; font-size: 12px; color: #a8a8ae; text-align: right; }
+#metaFilenameSingleRow input { width: 100%; margin: 0; }
+.meta-input-wrap { position: relative; flex: 1; min-width: 0; }
+.meta-input-wrap input { width: 100%; margin: 0; padding-right: 26px; }
+.meta-field-arrow-btn {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: #a8a8ae;
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 0;
+}
+@media (hover: hover) { .meta-field-arrow-btn:hover { background: #35353a; color: #e8e8ea; } }
+.meta-field-arrow-btn:disabled { visibility: hidden; }
+.meta-field-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: #26262a;
+  border: 1px solid #35353a;
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+  max-height: 180px;
+  overflow-y: auto;
+  z-index: 20;
+  padding: 4px;
+}
+.meta-field-dropdown-item {
+  padding: 6px 10px;
+  font-size: 13px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (hover: hover) { .meta-field-dropdown-item:hover { background: #35353a; } }
+.meta-field-dropdown-item.keep-multi { color: #a8a8ae; font-style: italic; }
+
+.meta-row-lyrics {
+  align-items: flex-start;
+  margin-top: 12px;
+}
+.meta-row-lyrics label { margin-top: 4px; }
+.meta-lyrics-wrap { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.meta-lyrics-wrap textarea {
+  width: 100%;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 13px;
+  padding: 8px;
+  line-height: 1.5;
+}
+.meta-lyrics-actions { display: flex; justify-content: space-between; gap: 6px; }
+.meta-lyrics-actions button {
+  background: #2a2a2e;
+  border: none;
+  color: #e8e8ea;
+  padding: 5px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+@media (hover: hover) { .meta-lyrics-actions button:hover { background: #35353a; } }
+
+.meta-modal .modal-actions { margin-top: 16px; }

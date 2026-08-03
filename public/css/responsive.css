@@ -1,0 +1,734 @@
+/* ---------------------------------------------------------------------------
+   responsive.css — Small-viewport overrides that turn the three-pane desktop
+   layout into a single-pane, tab-switched app shell with a bottom nav bar.
+   Load LAST so its overrides win the cascade against the component files
+   above. Desktop layout (>780px) is completely untouched.
+
+   Structure of this file:
+   1. Mobile-only elements: unconditional `display: none` defaults (so they
+      never affect desktop, full stop, with no dependency on media-query
+      cascade order), then turned on inside the @media block below.
+   2. @media (hover: none), (pointer: coarse) — touch-specific tweaks that
+      apply regardless of screen size (e.g. a tablet in landscape).
+   3. @media (max-width: 780px) — the main phone-width layout.
+   4. @media (max-width: 420px) — small-phone trims.
+   --------------------------------------------------------------------------- */
+
+/* =========================================================================
+   1. Mobile-only elements — unconditional hidden-by-default
+   =========================================================================
+   Every element that only exists for the mobile layout gets its display
+   set to none here, UNCONDITIONALLY (not inside any @media block). This is
+   the single source of truth for "invisible on desktop" — the @media
+   (max-width: 780px) block below turns each one on for narrow viewports.
+   Declaring the "off" state only inside the media query (and never outside
+   it) was the bug that showed the mobile player doubled up on desktop: with
+   no unconditional rule, these elements fell back to the browser's default
+   display (block, for a <div>) on any viewport where the media query didn't
+   apply, since there was nothing telling them to be hidden there at all. */
+
+.bottom-nav,
+.mini-player,
+.full-player,
+.sidebar-close-btn,
+.btn-icon-mobile,
+.settings-row-auth-mobile,
+.search-lens-icon,
+.mobile-select-mode-group,
+.row-menu-btn {
+  display: none;
+}
+/* Belt-and-suspenders: this button also carries .btn-icon-mobile (already
+   hidden above), but give it its own unconditional rule too so its
+   desktop-hidden state doesn't depend on that shared class alone. */
+#mobileSelectBtn { display: none; }
+
+/* =========================================================================
+   2. Touch-specific tweaks (not tied to screen width)
+   ========================================================================= */
+
+/* filelist.css scopes .file-row:hover (and its variants) behind
+   @media (hover: hover) at the source, so none of those rules exist in
+   the cascade on touch at all — no override needed here to neutralize
+   them. What's still needed here is touch-specific, not hover-related:
+   the folder row's play button (revealed via :hover on desktop) needs to
+   be permanently visible on touch instead, since :hover isn't a
+   meaningful trigger there. */
+@media (hover: none), (pointer: coarse) {
+  /* Desktop swaps between the folder glyph and a hover-revealed play
+     button using :hover-driven opacity — on touch, :hover also fires
+     transiently during the tap that navigates into a folder, which
+     flashed the folder glyph back in for a frame right before the page
+     transitioned. Removing the glyph from layout entirely (not just
+     hiding it at opacity 0, which still left it "hoverable") avoids that
+     mid-tap flash: only the play button ever occupies this spot. Tapping
+     it plays the folder; tapping elsewhere on the row still opens it
+     (separate handler). */
+  .folder-icon-default { display: none; }
+  .folder-icon-play-btn { opacity: 1; font-size: 15px; }
+}
+
+/* =========================================================================
+   3. Main phone-width layout (<=780px)
+   ========================================================================= */
+@media (max-width: 780px) {
+
+  /* Real value for --bottom-nav-h (declared in base.css at 0px for
+     desktop, where there's no bottom nav at all) — every other rule that
+     needs to know the nav's own base height (not counting the safe-area
+     padding, which varies per device) reads this instead of repeating the
+     number, so a future height change only needs to happen here. */
+  :root { --bottom-nav-h: 44px; }
+
+  /* Scrollbars are a mouse-era affordance — on a touchscreen they're just
+     visual clutter next to native momentum scrolling, so hide every one
+     of them here in one place rather than the ad-hoc per-element rules
+     this previously relied on (several of which didn't cover every
+     scrollable element, e.g. the album strip in artist view). */
+  * {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  *::-webkit-scrollbar { display: none; width: 0; height: 0; }
+
+  /* ----- App shell / tab switching ----- */
+
+  /* index.html no longer sets apple-mobile-web-app-status-bar-style, which
+     removes the actual trigger for iOS's "chin gap" WebKit bug (that meta
+     tag combined with viewport-fit=cover shifted the view up behind the
+     status bar without the viewport height compensating). 100vh is kept
+     here anyway as the safe default per the same findings: if
+     black-translucent is ever reintroduced later, 100vh already avoids
+     the bug outright, where height:100% (or 100dvh) would reproduce it. */
+  html, body {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100vh;
+  }
+  .app { height: 100vh; }
+  .content { position: relative; }
+
+  /* Bottom nav: fixed strip, own space at the screen's bottom edge. The
+     player bar's box (both collapsed and expanded) stops above this strip
+     geometrically — see #playerBar's `bottom` offset — so there's no
+     overlap to arbitrate with z-index; this value just keeps the nav
+     above incidental floating elements like the upload panel. */
+  .bottom-nav {
+    display: flex;
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    /* 54px (previous base height) left visibly more empty space above the
+       home-indicator safe area than a native app's tab bar (e.g. iOS
+       Twitter/X's bottom bar) — compared directly via screenshot, our
+       icon row sat noticeably higher above the safe area than theirs.
+       44px matches that denser, more native-feeling proportion. */
+    height: calc(44px + var(--safe-bottom, 0px));
+    padding-bottom: var(--safe-bottom, 0px);
+    background: rgba(20, 20, 23, 0.92);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-top: 1px solid #2a2a2e;
+    z-index: 80;
+  }
+  .bottom-nav-btn {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    background: none;
+    border: none;
+    color: #77777d;
+    cursor: pointer;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  .bottom-nav-btn svg { transition: transform 0.15s ease; }
+  .bottom-nav-btn.active { color: var(--accent-color, #6ea8fe); }
+  .bottom-nav-btn:active svg { transform: scale(0.88); }
+
+  /* Only one of file-list / sidebar is visible at a time; JS toggles
+     .mobile-tab-files / .mobile-tab-queue / .mobile-tab-playlists on .app */
+  .file-list-wrap { display: none; }
+  .app.mobile-tab-files .file-list-wrap { display: flex; }
+
+  .sidebar {
+    display: none;
+    position: fixed;
+    inset: 0;
+    top: 0;
+    width: 100%;
+    z-index: 60;
+    padding-top: var(--safe-top, 0px);
+  }
+  .app.mobile-tab-queue .sidebar,
+  .app.mobile-tab-playlists .sidebar { display: flex; }
+  /* Inside the sidebar overlay, only the matching panel + toolbar shows;
+     the sidebar's own Queue/Playlists tab strip is redundant with the
+     bottom nav, so it's replaced by a single back arrow. */
+  .sidebar-tabs .tab-btn { display: none; }
+  .sidebar-close-btn { display: flex; }
+  .sidebar-resize-handle { display: none; }
+
+  /* Reserve room at the bottom of both panes for the bottom nav (and the
+     player bar, when a track is loaded — handled by the has-player rule). */
+  .file-list-wrap, .sidebar {
+    padding-bottom: calc(var(--bottom-nav-h) + var(--safe-bottom, 0px));
+  }
+  .app.has-player .file-list-wrap,
+  .app.has-player .sidebar {
+    padding-bottom: calc(var(--bottom-nav-h) + var(--player-collapsed-h, 58px) + var(--safe-bottom, 0px));
+  }
+
+  /* ----- Top bar ----- */
+
+  .topbar { padding: 10px 12px; padding-top: calc(10px + var(--safe-top, 0px)); flex-wrap: wrap; gap: 8px; }
+  .path-breadcrumb { order: 3; width: 100%; flex-basis: 100%; }
+  .search-wrap { flex: 1; margin: 0; min-width: 0; }
+  /* Lens icon is positioned relative to search-input-wrap (input only),
+     not search-wrap (which also contains the scope-toggle button) — using
+     search-wrap as the anchor previously placed the icon underneath the
+     scope button instead of inside the input. */
+  .search-input-wrap { position: relative; flex: 1; min-width: 0; }
+  .search-lens-icon {
+    display: block;
+    position: absolute;
+    left: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #77777d;
+    pointer-events: none;
+  }
+  .search-input { width: 100%; padding-left: 32px; }
+  .topbar-actions { display: flex; align-items: center; flex-wrap: wrap; row-gap: 6px; }
+  .topbar-actions button {
+    margin-left: 6px;
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  /* Desktop shows a text/emoji label; mobile shows a proper line-icon
+     instead so the row of buttons reads as an app toolbar, not squished
+     desktop buttons. Swap which one is visible rather than reflowing text. */
+  .btn-label-desktop { display: none; }
+  .btn-icon-mobile { display: inline-flex; }
+
+  /* Login/logout moves into the Settings modal on mobile — the real
+     #authBtn stays in the DOM (unchanged) so none of its click/auth logic
+     needs duplicating, it's just not shown in the topbar here.
+     Specificity note: .topbar-actions button (above) sets display on this
+     same element, so the hide rule needs to be at least as specific to
+     reliably win regardless of source order. */
+  .topbar-actions .desktop-only-topbar-btn { display: none; }
+
+  /* Uploads stay available on mobile (icon-only trigger); the panel itself
+     is repositioned below so it doesn't collide with the bottom nav. */
+  .upload-panel { position: fixed; left: 8px; right: 8px; top: auto; bottom: calc(64px + var(--safe-bottom, 0px)); width: auto; max-height: 50vh; }
+  .app.has-player .upload-panel { bottom: calc(var(--bottom-nav-h) + var(--player-collapsed-h, 58px) + var(--safe-bottom, 0px)); }
+
+  /* ----- File list -> app-style rows ----- */
+
+  .file-list-wrap {
+    --grid-template: 40px minmax(0, 1fr) 56px !important;
+  }
+  .file-list-wrap.search-mode,
+  .file-list-wrap.album-view {
+    --grid-template: 40px minmax(0, 1fr) 56px !important;
+  }
+  .file-list-header { display: none; }
+  .file-row { padding: 10px 12px; column-gap: 12px; }
+  .file-title, .file-artist, .file-album, .file-duration, .file-size,
+  .col-track, .file-track { display: none !important; }
+  .file-name { font-size: 15px; }
+  .file-art { width: 36px; height: 36px; }
+  .row-open-folder-btn { display: none; }
+
+  /* Row menu button (3 dots): the mobile row's only extra control, hidden
+     entirely while select mode is active (rows themselves become the tap
+     target for selection then — see handleRowClickMobileAware in
+     filelist.js). Lives in the grid's trailing 56px column reserved
+     above. */
+  .row-menu-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: none;
+    color: #a8a8ae;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    cursor: pointer;
+    justify-self: end;
+  }
+  .app.mobile-select-mode .row-menu-btn { display: none; }
+
+  /* Selected rows in select mode use the same accent highlight as
+     desktop's ctrl/shift-click selection (.file-row.selected, defined in
+     filelist.css) — nothing extra needed here, just confirming the two
+     mechanisms share that same visual via the same class. */
+
+  .library-banner { padding: 14px 12px; gap: 12px; }
+  .lib-art, .lib-art-placeholder { width: 84px; height: 84px; }
+  .lib-name { font-size: 17px; }
+  .lib-name-row { flex-wrap: wrap; }
+  .album-strip { gap: 10px; }
+  .album-card, .album-card-art { width: 84px; height: 84px; }
+
+  /* ----- Select mode topbar controls ----- */
+
+  /* #mobileSelectBtn.hidden and #mobileSelectModeGroup.hidden must beat
+     the "always visible on mobile" rules below (display:inline-flex
+     !important / display:flex) — .hidden alone is never a generic utility
+     class in this codebase (see base.css and every other *.hidden pairing
+     across the project), it only works where a rule explicitly pairs it
+     with the element's own selector, which these two were missing
+     entirely. That's why toggling the class did nothing: there was simply
+     no CSS rule for it to match against. */
+  #mobileSelectBtn.mobile-select-toggle-btn.hidden { display: none !important; }
+  #mobileSelectModeGroup.mobile-select-mode-group.hidden { display: none !important; }
+  #mobileSelectBtn.mobile-select-toggle-btn { display: inline-flex !important; font-size: 13px; width: auto !important; padding: 0 10px !important; }
+  .mobile-select-mode-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: 6px;
+  }
+  .mobile-select-mode-group button {
+    margin-left: 0;
+    background: #2a2a2e;
+    border: none;
+    color: #e8e8ea;
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .mobile-select-mode-group button:disabled { opacity: 0.4; cursor: default; }
+
+  /* ----- Sidebar contents on mobile ----- */
+
+  .queue-toolbar { padding: 10px 12px; }
+  .queue-item, .playlist-item { padding: 12px 10px; font-size: 14px; }
+  .tab-panel { padding: 10px; }
+
+  /* ----- Lyrics: desktop panel hidden, replaced by an inline view inside
+     the expanded player (further below) ----- */
+  .lyrics-box-wrap { display: none !important; }
+
+  /* =======================================================================
+     Player bar shell: fixed box, transform-driven collapse/expand
+     ======================================================================= */
+
+  /* Both collapsed and expanded states live in the same fixed, full-height
+     box; only a translateY moves it between "mostly off-screen, showing
+     just the mini strip" and "fully on screen". Using one transform for
+     both the tap-toggle and the drag gesture means they share one
+     mechanism instead of two different animation paths that could get out
+     of sync — the drag handler in layout-init.js sets this same transform
+     property while dragging, then either lets the transition below carry
+     it the rest of the way or reverses it. */
+  :root { --player-collapsed-h: 58px; --drag-offset: 0px; }
+
+  /* Specificity note: player.css's ".player-blur-group > *:not(.player-blur-clip)"
+     rule sets position:relative on this element (it's a direct child of
+     .player-blur-group) at specificity 0-2-0, which beats a plain
+     ".player-bar { position: fixed }" rule (0-1-0) — position:fixed was
+     silently losing that fight, so the bar was never actually taken out
+     of normal document flow on mobile. #playerBar (ID, 1-0-0) settles it
+     outright. */
+  /* #playerBar is a CHILD of .player-blur-group (see index.html), not a
+     sibling — so this element (the blurred album-art canvas) and its
+     child both being independently position:fixed with their own,
+     separately-computed transforms was compounding incorrectly: combined
+     with overflow:hidden here, it was clipping/burying #playerBar's own
+     visible content, leaving only the blur canvas visible. Now this is
+     the ONLY element with real fixed positioning + transform; #playerBar
+     below just fills it (position:absolute; inset:0) instead of
+     duplicating that positioning independently. */
+  .player-blur-group {
+    position: fixed;
+    left: 0; right: 0;
+    top: 0;
+    bottom: calc(var(--bottom-nav-h) + var(--safe-bottom, 0px));
+    height: auto;
+    z-index: 70;
+    transform: translateY(calc(100% - var(--player-collapsed-h) + var(--drag-offset, 0px)));
+    transition: transform 0.32s cubic-bezier(0.32, 0.72, 0, 1);
+    will-change: transform;
+    overflow: hidden;
+  }
+  .player-blur-group.dragging { transition: none; }
+
+  #playerBar.player-bar {
+    position: absolute;
+    inset: 0;
+    height: auto;
+    z-index: 1;
+    padding: 8px 12px;
+    gap: 8px;
+    /* Without this, a vertical drag on the bar is interpreted by the
+       browser as an attempt to scroll the page — competing with (and
+       winning over) the custom pointermove-driven swipe-to-collapse/
+       expand gesture below, which is why the gesture wasn't working: the
+       page would rubber-band slightly instead of the player actually
+       moving. Buttons/inputs/lyrics content still get normal touch
+       behavior since onPointerDown excludes drag-start on them entirely
+       (see layout-init.js) — this only affects the bare background/art/
+       text areas the drag is meant to start from. */
+    touch-action: none;
+    /* Translucent instead of solid so .player-blur-group (this element's
+       own parent, which now owns the blur canvas AND the fixed
+       positioning/transform) actually shows through behind it — a solid
+       fill here would otherwise completely hide the blur regardless of
+       how correctly that layer itself is positioned. */
+    background: rgba(23, 23, 26, 0.72);
+    backdrop-filter: blur(1px);
+    -webkit-backdrop-filter: blur(1px);
+    border-top: 1px solid #2a2a2e;
+    border-radius: 0;
+    /* No transform/transition of its own — .player-blur-group (the
+       parent) now owns that exclusively. Duplicating it here (as before)
+       meant #playerBar's fixed positioning + its own separate transform
+       were compounding on top of the parent's already-fixed, already-
+       transformed box, which is what broke the whole player down to just
+       a blurred rectangle with nothing visible or tappable on top. */
+    align-items: flex-start;
+    overflow: hidden;
+  }
+  .player-bar.dragging { transition: none; }
+
+  /* ----- Mini player (collapsed strip) -----
+     Fully independent element from the full player below — its own art,
+     title/artist, and prev/play/next/close buttons (separate IDs, see
+     index.html + layout-init.js for the click-forwarding/text-mirroring).
+     A plain flex row; nothing here is shared with or can be affected by
+     the full player's markup or CSS. */
+  #playerBar.player-bar:not(.expanded) .mini-player {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    /* --player-collapsed-h (58px) is the total sliver revealed by the
+       collapse transform, measured from #playerBar's own top edge — which
+       already includes its 8px top padding. Subtracting that here (and
+       the 8px bottom padding, so the row doesn't get pushed against the
+       very bottom of the revealed sliver either) keeps this row's content
+       fully inside the visible area instead of the bottom few pixels
+       being clipped by the transform. */
+    height: calc(var(--player-collapsed-h, 58px) - 16px);
+  }
+  .mini-player-art, .mini-player-art-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 6px;
+    flex-shrink: 0;
+  }
+  .mini-player-art { object-fit: cover; background: #2a2a2e; }
+  .mini-player-art.hidden { display: none; }
+  .mini-player-art-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #2a2a2e;
+    font-size: 18px;
+    opacity: 0.7;
+  }
+  .mini-player-art-icon.hidden { display: none; }
+  .mini-player-text { flex: 1; min-width: 0; overflow: hidden; }
+  .mini-player-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #e8e8ea;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .mini-player-subtitle {
+    font-size: 11px;
+    color: #a8a8ae;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .mini-player-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    background: none;
+    border: none;
+    color: #e8e8ea;
+    font-size: 16px;
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    cursor: pointer;
+  }
+  #miniPlayPauseBtn .icon-play.hidden,
+  #miniPlayPauseBtn .icon-pause.hidden { display: none; }
+
+  /* ----- Desktop's own player elements: hidden on mobile -----
+     .now-playing / .player-controls are desktop-only from here on — the
+     .full-player below (a fully independent set of elements, same
+     approach as .mini-player) covers the mobile expanded state. */
+  .now-playing, .player-controls { display: none !important; }
+
+  #playerBar.player-bar.expanded {
+    /* Same specificity fix as the base rule above (#playerBar.player-bar)
+       — this needs to be at least as specific as that rule to actually
+       override its overflow/align-items, since a plain ".player-bar.expanded"
+       (0-2-0) loses to "#playerBar.player-bar" (1-1-0) regardless of
+       source order. No transform here — .player-blur-group.expanded
+       (this element's parent) owns that exclusively; duplicating it here
+       was the actual bug (see the long comment on the base rule above). */
+    display: flex !important;
+    flex-direction: column;
+    align-items: stretch;
+    padding: calc(16px + var(--safe-top, 0px)) 12px 0;
+    z-index: 2;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+  .player-blur-group.expanded { transform: translateY(var(--drag-offset, 0px)); }
+
+  /* ----- Full player (expanded) -----
+     Real, single-purpose row divs (.fp-row-*), each one clearly one row,
+     laid out with one plain grid and one shared gap — see index.html for
+     why this can't just reuse desktop's .now-playing/.player-controls
+     elements directly (they're a single flat flex row there; wrapping
+     subsets of them in row divs would change desktop's own layout). */
+  #playerBar.player-bar.expanded .full-player {
+    display: grid;
+    grid-template-rows: 1fr auto auto auto auto auto;
+    row-gap: 14px;
+    width: 100%;
+    min-height: 0;
+    flex: 1;
+    padding-bottom: 10px;
+  }
+  .fp-row { display: flex; align-items: center; justify-content: center; }
+
+  .fp-row-art { min-height: 0; }
+  .fp-art, .fp-art-icon { width: 220px; height: 220px; border-radius: 12px; flex-shrink: 0; }
+  .fp-art { object-fit: cover; background: #2a2a2e; }
+  .fp-art.hidden { display: none; }
+  .fp-art-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #2a2a2e;
+    font-size: 32px;
+    opacity: 0.7;
+  }
+  .fp-art-icon.hidden { display: none; }
+  /* Inline lyrics view replaces the art in this same row when toggled on. */
+  .mobile-lyrics-view { display: none; }
+  #fpArtRow.showing-lyrics .fp-art,
+  #fpArtRow.showing-lyrics .fp-art-icon { display: none; }
+  #fpArtRow.showing-lyrics .mobile-lyrics-view {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    max-width: 320px;
+    height: 220px;
+    overflow-y: auto;
+    scrollbar-width: none;
+    text-align: center;
+    padding: 0 8px;
+  }
+  .mobile-lyrics-view::-webkit-scrollbar { display: none; }
+  #mobileLyricsEmpty { flex: 1; display: flex; align-items: center; justify-content: center; color: #c8c8ce; font-size: 13px; }
+  #mobileLyricsEmpty.hidden { display: none; }
+  #mobileLyricsLines .lyrics-line { font-size: 14px; line-height: 1.9; color: #c8c8ce; }
+  #mobileLyricsLines .lyrics-line.active { color: #e8e8ea; font-weight: 600; }
+
+  .fp-row-title { flex-direction: column; text-align: center; }
+  .fp-title { font-size: 18px; font-weight: 600; color: #e8e8ea; line-height: 1.2; }
+  .fp-subtitle { font-size: 13px; color: #a8a8ae; line-height: 1.2; }
+
+  .fp-row-seek { padding: 0 4px; }
+  #fpSeekBar {
+    width: 100%;
+    margin: 0;
+    --played-pct: 0%;
+    --buffered-pct: 0%;
+    background: linear-gradient(to right,
+      var(--accent-color) 0%, var(--accent-color) var(--played-pct),
+      rgba(255,255,255,0.22) var(--played-pct), rgba(255,255,255,0.22) var(--buffered-pct),
+      #35353a var(--buffered-pct), #35353a 100%);
+  }
+  #fpSeekBar::-webkit-slider-thumb { background: var(--accent-color); }
+  #fpSeekBar::-moz-range-progress { background: var(--accent-color); }
+  #fpSeekBar::-moz-range-thumb { background: var(--accent-color); }
+
+  .fp-row-timers { justify-content: space-between; padding: 0 4px; font-size: 12px; color: #a8a8ae; font-variant-numeric: tabular-nums; }
+
+  .fp-row-icons { gap: 4px; }
+  .fp-icon-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    background: none;
+    border: none;
+    border-radius: 4px;
+    color: #e8e8ea;
+    width: 40px;
+    height: 40px;
+    font-size: 20px;
+    padding: 0;
+    cursor: pointer;
+    position: relative;
+  }
+  /* Matches desktop's .player-controls button.active-state exactly (see
+     player.css) — solid accent-color fill, dark icon/text. */
+  .fp-icon-btn.active-state { background: var(--accent-color); color: #12121e; }
+  #fpSpeedBtn { border-radius: 50%; font-size: 13px; }
+  #fpPlayPauseBtn .icon-play.hidden,
+  #fpPlayPauseBtn .icon-pause.hidden { display: none; }
+  /* Loop button: the mode label (Off/All/One) renders centered on top of
+     the repeat-arrows icon instead of beside it — icon and text share the
+     same cell via absolute layering rather than inline flow. The icon is
+     enlarged here (overriding the 16x16 it's mirrored in with) so its
+     built-in gap between the top and bottom arrows scales up too, giving
+     the label clear room instead of overlapping the strokes. */
+  #fpLoopBtn svg { position: absolute; inset: 0; margin: auto; width: 18px; height: 18px; }
+  #fpLoopBtn .loop-label { position: relative; z-index: 1; font-size: 9px; margin-left: 0; }
+
+  .fp-row-volume { gap: 6px; padding: 0 4px; }
+  #fpVolumeBar {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    --volume-pct: 0%;
+    background: linear-gradient(to right, var(--accent-color) 0%, var(--accent-color) var(--volume-pct), #35353a var(--volume-pct), #35353a 100%);
+  }
+  #fpVolumeBar::-webkit-slider-thumb { background: var(--accent-color); }
+  #fpVolumeBar::-moz-range-progress { background: var(--accent-color); }
+  #fpVolumeBar::-moz-range-thumb { background: var(--accent-color); }
+  .fp-small-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    background: none;
+    border: none;
+    border-radius: 4px;
+    color: #e8e8ea;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    cursor: pointer;
+  }
+
+  /* ----- Context menu: native app action sheet -----
+     Anchored to the bottom edge instead of the tap point, which is
+     unreliable on touch (no hover, finger occludes the target). JS still
+     sets left/top but this override wins the cascade and ignores them. */
+  .context-menu {
+    position: fixed !important;
+    left: 8px !important;
+    right: 8px !important;
+    bottom: calc(64px + var(--safe-bottom, 0px)) !important;
+    top: auto !important;
+    width: auto;
+    min-width: 0;
+    padding: 6px;
+    border-radius: 14px;
+  }
+  .context-menu-item { padding: 12px 14px; font-size: 15px; }
+
+  /* ----- Settings modal: mobile-only login/logout row -----
+     Styled to match the existing settings-row-buttons look.
+     #settingsAuthBtn's content is kept in sync with the real #authBtn by
+     layout-init.js — no auth logic is duplicated here. */
+  .settings-row-auth-mobile {
+    display: flex;
+    justify-content: center;
+    padding-top: 14px;
+    border-bottom: none;
+  }
+  #settingsAuthBtn {
+    background: #2a2a2e;
+    border: none;
+    color: #e8e8ea;
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  @media (hover: hover) { #settingsAuthBtn:hover { background: #35353a; } }
+  #settingsAuthBtn.logged-in { background: color-mix(in srgb, var(--accent-color) 18%, transparent); color: color-mix(in srgb, var(--accent-color) 70%, white); }
+
+  /* ----- Metadata editor -----
+     Desktop's layout (art panel + fields side by side, each field row as
+     label-left/input-right) mostly still works at mobile widths — this
+     just fits it into a narrower modal: art panel moves above the fields
+     instead of beside them, and field rows get a narrower, fixed label
+     column so the label+input pair reads as two clean columns rather than
+     the label crowding the input. */
+  .meta-modal { width: calc(100vw - 32px); max-width: 420px; }
+  .meta-body { flex-direction: column; align-items: center; gap: 8px; }
+  /* Explicit order, not left to fall out of source order (.meta-art-panel
+     happens to come first in the HTML, but that's incidental — pinning it
+     here means this stays correct even if the markup order ever changes). */
+  .meta-art-panel { width: 100%; order: 1; gap: 6px; }
+  /* .meta-art-changed-count / .meta-art-status reserve a min-height even
+     when empty (the common single-file case has nothing to show in
+     either), which was adding real distance between the art image and
+     Filename below on top of .meta-body's own gap above. */
+  .meta-art-changed-count, .meta-art-status { min-height: 0; }
+  .meta-fields { width: 100%; order: 2; }
+  .meta-row { gap: 10px; }
+  .meta-row label { width: 64px; font-size: 12.5px; }
+  .meta-row-lyrics { margin-top: 8px; }
+
+  /* Lyrics: one line tall by default instead of desktop's 6-row textarea —
+     still resizable (the drag handle is unaffected), just not claiming a
+     large chunk of the already-limited vertical space up front on a
+     phone screen. */
+  .meta-lyrics-wrap textarea {
+    /* border-box (global reset) means height includes padding — the
+       previous "height: 1.5em" left only ~7px for a ~19.5px text line
+       (13px font * 1.5 line-height) once the 6px top+bottom padding was
+       subtracted, clipping it as seen in testing. Sizing explicitly off
+       the same line-height this rule sets (not an inherited value) keeps
+       the math exact: one full line + the padding on both sides. */
+    line-height: 1.4;
+    height: calc(13px * 1.4 + 12px);
+    min-height: calc(13px * 1.4 + 12px);
+    padding: 6px 8px;
+  }
+  /* All three buttons stay on one line — each is allowed to shrink
+     (min-width:0, tighter padding/font/gap than desktop) rather than wrap
+     to a second line or overflow the narrower mobile modal width. */
+  .meta-lyrics-actions {
+    flex-wrap: nowrap;
+    gap: 4px;
+  }
+  .meta-lyrics-actions button {
+    flex: 1;
+    min-width: 0;
+    justify-content: center;
+    padding: 5px 6px;
+    font-size: 11px;
+    gap: 3px;
+    white-space: nowrap;
+  }
+}
+
+/* =========================================================================
+   4. Small phones: trim further
+   ========================================================================= */
+@media (max-width: 420px) {
+  .now-playing-text .track-path { display: none; }
+  .search-input { font-size: 16px; } /* prevents iOS auto-zoom on focus */
+  .modal { width: calc(100vw - 32px); max-width: 360px; }
+}

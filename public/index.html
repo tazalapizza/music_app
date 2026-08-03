@@ -2,14 +2,45 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
 <title>Vibing</title>
+
+<!-- PWA: lets iOS/Android "Add to Home Screen" launch this as a standalone
+     app with no browser chrome (no address bar, no bottom toolbar), instead
+     of opening inside Safari/Chrome. See manifest.json for icons/colors. -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#121214">
+
+<!-- iOS specifically ignores manifest.json for standalone mode and needs
+     these meta tags instead (Android reads the manifest fine on its own).
+     No apple-mobile-web-app-status-bar-style meta tag: setting it to
+     black-translucent (to render content behind/through the status bar)
+     combined with viewport-fit=cover above is a documented iOS WebKit bug
+     that shifts the whole view up behind the status bar without the
+     viewport height compensating, leaving a matching gap at the bottom
+     (the "chin gap"). Omitting the tag entirely gives a normal opaque
+     status bar and avoids the bug at the source, rather than working
+     around it. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Vibing">
+
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
 <link rel="icon" type="image/png" sizes="16x16" href="favicon-16.png">
 <link rel="shortcut icon" href="favicon.ico">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="css/base.css">
+    <link rel="stylesheet" href="css/topbar.css">
+    <link rel="stylesheet" href="css/filelist.css">
+    <link rel="stylesheet" href="css/sidebar-queue-playlists.css">
+    <link rel="stylesheet" href="css/lyrics.css">
+    <link rel="stylesheet" href="css/toast.css">
+    <link rel="stylesheet" href="css/player.css">
+    <link rel="stylesheet" href="css/context-menu-modal.css">
+    <link rel="stylesheet" href="css/metadata-editor.css">
+    <link rel="stylesheet" href="css/settings.css">
+    <link rel="stylesheet" href="css/uploads.css">
+    <link rel="stylesheet" href="css/responsive.css">
 </head>
 <body>
   <!-- Icon sprite: symbols reused via <use> below instead of duplicating the
@@ -22,36 +53,61 @@
     <symbol id="icon-folder" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></symbol>
     <symbol id="icon-trash" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></symbol>
     <symbol id="icon-shuffle" viewBox="0 0 24 24"><polyline points="16 3 21 3 21 8"></polyline><line x1="4" y1="20" x2="21" y2="3"></line><polyline points="21 16 21 21 16 21"></polyline><line x1="15" y1="15" x2="21" y2="21"></line><line x1="4" y1="4" x2="9" y2="9"></line></symbol>
+    <symbol id="icon-prev" viewBox="0 0 24 24"><rect x="4" y="4" width="2.5" height="16"></rect><polygon points="19 4 19 20 8 12 19 4"></polygon></symbol>
+    <symbol id="icon-next" viewBox="0 0 24 24"><rect x="17.5" y="4" width="2.5" height="16"></rect><polygon points="5 4 5 20 16 12 5 4"></polygon></symbol>
+    <symbol id="icon-play" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"></polygon></symbol>
+    <symbol id="icon-pause" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></symbol>
+    <symbol id="icon-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></symbol>
+    <symbol id="icon-chevron-left" viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"></polyline></symbol>
+    <symbol id="icon-chevron-right" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"></polyline></symbol>
+    <symbol id="icon-music-note" viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></symbol>
   </svg>
   <div class="app">
     <header class="topbar">
       <div class="path-breadcrumb" id="breadcrumb"></div>
       <div class="search-wrap">
         <button id="searchScopeBtn" class="search-scope-btn" title="Search everywhere (click to search only the current folder)"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg></button>
-        <input type="text" id="searchInput" class="search-input" placeholder="Search folders and files..." autocomplete="off">
+        <div class="search-input-wrap">
+          <svg class="search-lens-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+          <input type="text" id="searchInput" class="search-input" placeholder="Search folders and files..." autocomplete="off">
+        </div>
         <button id="searchClearBtn" class="search-clear hidden" title="Clear search">✕</button>
       </div>
       <div class="topbar-actions">
-        <button id="newFolderBtn" title="New folder">+ Folder</button>
+        <!-- Mobile-only: toggles select mode for the file list (see
+             responsive.css/layout-init.js). Hidden on desktop, where
+             multi-select is already ctrl/shift-click on rows directly. -->
+        <button id="mobileSelectBtn" class="btn-icon-mobile mobile-select-toggle-btn" title="Select items">Select</button>
+        <div id="mobileSelectModeGroup" class="mobile-select-mode-group hidden">
+          <button id="mobileSelectOkBtn" title="Done selecting">OK</button>
+          <button id="mobileSelectEditBtn" title="Actions for selected items" disabled>Edit</button>
+        </div>
+        <button id="newFolderBtn" title="New folder">
+          <span class="btn-label-desktop">+ Folder</span>
+          <svg class="btn-icon-mobile" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path><line x1="12" y1="11" x2="12" y2="16"></line><line x1="9.5" y1="13.5" x2="14.5" y2="13.5"></line></svg>
+        </button>
         <div class="upload-wrap">
-          <button id="uploadBtn" title="Uploads">⬆ Uploads</button>
+          <button id="uploadBtn" title="Uploads">
+            <span class="btn-label-desktop">⬆ Uploads</span>
+            <svg class="btn-icon-mobile" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="12" x2="12" y2="18"></line><line x1="9" y1="15" x2="15" y2="15"></line></svg>
+          </button>
           <input type="file" id="uploadInput" multiple hidden>
           <div id="uploadPanel" class="upload-panel hidden">
             <div class="upload-panel-header">
               <button id="uploadClearBtn" title="Clear completed and failed uploads">Clear</button>
-              <button id="uploadExplorerBtn" title="Choose files"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#6ea8fe" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;"><use href="#icon-folder"></use></svg>Browse files</button>
+              <button id="uploadExplorerBtn" title="Choose files"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;stroke:var(--accent-color);"><use href="#icon-folder"></use></svg>Browse files</button>
             </div>
             <div id="uploadList" class="upload-list">
               <div class="upload-empty" id="uploadEmpty">No uploads yet</div>
             </div>
           </div>
         </div>
-        <button id="settingsBtn" title="Settings"><span id="settingsCogIcon">⚙</span></button>
-        <button id="authBtn" title="Log in to make changes"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>Log in</button>
+        <button id="settingsBtn" title="Settings"><svg id="settingsCogIcon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-settings"></use></svg></button>
+        <button id="authBtn" class="desktop-only-topbar-btn" title="Log in to make changes"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>Log in</button>
       </div>
     </header>
 
-    <main class="content">
+    <main class="content" id="mainContent">
       <section class="file-list-wrap" id="fileListWrap">
         <div id="libraryBanner" class="library-banner hidden"></div>
         <div class="file-list-header" id="fileListHeader">
@@ -72,6 +128,9 @@
 
       <aside class="sidebar" id="sidebar">
         <div class="sidebar-tabs">
+          <button class="sidebar-close-btn" id="sidebarCloseBtn" title="Back to files">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
+          </button>
           <button class="tab-btn active" data-tab="queue">Queue</button>
           <button class="tab-btn" data-tab="playlists">Playlists</button>
         </div>
@@ -83,6 +142,21 @@
         <div class="tab-panel hidden" id="playlistsPanel"></div>
       </aside>
     </main>
+
+    <nav class="bottom-nav" id="bottomNav">
+      <button class="bottom-nav-btn active" data-mobile-tab="files" title="Files">
+        <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+        <span>Files</span>
+      </button>
+      <button class="bottom-nav-btn" data-mobile-tab="queue" title="Queue">
+        <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
+        <span>Queue</span>
+      </button>
+      <button class="bottom-nav-btn" data-mobile-tab="playlists" title="Playlists">
+        <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15V6"></path><path d="M18.5 18a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z"></path><path d="M12 12H3"></path><path d="M16 6H3"></path><path d="M12 18H3"></path></svg>
+        <span>Playlists</span>
+      </button>
+    </nav>
 
     <div class="player-blur-group">
       <div class="player-blur-clip">
@@ -127,9 +201,101 @@
       </div>
 
       <footer class="player-bar hidden" id="playerBar">
-      <div class="now-playing">
-        <img id="playerArt" class="player-art hidden" alt="">
-        <span id="playerArtIcon" class="player-art-icon">🎵</span>
+
+      <!-- ================= MOBILE MINI PLAYER =================
+           Fully independent element: its own art/title/artist and its
+           own prev/pause/next/close buttons (separate IDs, forwarding
+           clicks to the real #prevBtn/#playPauseBtn/#nextBtn/
+           #closePlayerBtn below via layout-init.js) so nothing in the
+           full player's markup/CSS can ever affect this, or vice versa.
+           Shown only on mobile, only while collapsed — see responsive.css. -->
+      <div class="mini-player" id="miniPlayer">
+        <img id="miniPlayerArt" class="mini-player-art hidden" alt="">
+        <span id="miniPlayerArtIcon" class="mini-player-art-icon">🎵</span>
+        <div class="mini-player-text">
+          <div class="mini-player-title" id="miniPlayerTitle"></div>
+          <div class="mini-player-subtitle" id="miniPlayerSubtitle"></div>
+        </div>
+        <button id="miniPrevBtn" class="mini-player-btn" title="Previous"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><use href="#icon-prev"></use></svg></button>
+        <button id="miniPlayPauseBtn" class="mini-player-btn" title="Play/Pause">
+          <svg class="icon-play" viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><use href="#icon-play"></use></svg>
+          <svg class="icon-pause hidden" viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><use href="#icon-pause"></use></svg>
+        </button>
+        <button id="miniNextBtn" class="mini-player-btn" title="Next"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><use href="#icon-next"></use></svg></button>
+        <button id="miniCloseBtn" class="mini-player-btn" title="Close player"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
+      </div>
+
+      <!-- ================= MOBILE FULL PLAYER =================
+           Fully independent from the desktop .now-playing/.player-controls
+           below (same reasoning as the mini player above): real, single-
+           purpose row divs, each one clearly one row, sharing one simple
+           grid — rather than trying to reuse desktop's flat single-flex-row
+           elements, which can't be wrapped into row groups without changing
+           desktop's own layout. State (art, title, playing/active buttons,
+           seek position, volume) is mirrored one-way from the real elements
+           via layout-init.js; buttons forward clicks to the real ones. -->
+      <div class="full-player" id="fullPlayer">
+        <div class="fp-row fp-row-art" id="fpArtRow">
+          <img id="fpArt" class="fp-art hidden" alt="">
+          <span id="fpArtIcon" class="fp-art-icon">🎵</span>
+          <div class="mobile-lyrics-view hidden" id="mobileLyricsView">
+            <div class="lyrics-empty" id="mobileLyricsEmpty">No lyrics found</div>
+            <div class="lyrics-lines" id="mobileLyricsLines"></div>
+          </div>
+        </div>
+        <div class="fp-row fp-row-title">
+          <div class="fp-title" id="fpTitle"></div>
+          <div class="fp-subtitle" id="fpSubtitle"></div>
+        </div>
+        <div class="fp-row fp-row-seek">
+          <input type="range" id="fpSeekBar" min="0" max="100" step="0.01" value="0">
+        </div>
+        <div class="fp-row fp-row-timers">
+          <span id="fpTimeElapsed">0:00</span>
+          <span id="fpTimeRemaining">-0:00</span>
+        </div>
+        <div class="fp-row fp-row-icons">
+          <button id="fpLyricsBtn" class="fp-icon-btn" title="Show lyrics">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h9l4 4v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"></path><path d="M15 3v4h4"></path><line x1="7.5" y1="12" x2="12.5" y2="12"></line><line x1="7.5" y1="15" x2="11" y2="15"></line><path d="M14.5 17.2V11l3-0.6v5.8"></path><circle cx="13.2" cy="17.6" r="1.3"></circle><circle cx="16.2" cy="17" r="1.3"></circle></svg>
+          </button>
+          <button id="fpShuffleBtn" class="fp-icon-btn" title="Shuffle queue">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-shuffle"></use></svg>
+          </button>
+          <button id="fpPrevBtn" class="fp-icon-btn" title="Previous"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><use href="#icon-prev"></use></svg></button>
+          <button id="fpPlayPauseBtn" class="fp-icon-btn fp-play-btn" title="Play/Pause">
+            <svg class="icon-play" viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><use href="#icon-play"></use></svg>
+            <svg class="icon-pause hidden" viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><use href="#icon-pause"></use></svg>
+          </button>
+          <button id="fpNextBtn" class="fp-icon-btn" title="Next"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><use href="#icon-next"></use></svg></button>
+          <button id="fpLoopBtn" class="fp-icon-btn" title="Loop"></button>
+          <button id="fpSpeedBtn" class="fp-icon-btn" title="Playback speed">1x</button>
+        </div>
+        <div class="fp-row fp-row-volume">
+          <input type="range" id="fpVolumeBar" min="0" max="100" value="100" title="Volume">
+          <button id="fpFolderBtn" class="fp-small-btn" title="Open containing folder"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-folder"></use></svg></button>
+          <button id="fpDeleteBtn" class="fp-small-btn" title="Delete this track"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-trash"></use></svg></button>
+          <button id="fpOptionsBtn" class="fp-small-btn" title="More options">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><circle cx="12" cy="5" r="1.8"></circle><circle cx="12" cy="12" r="1.8"></circle><circle cx="12" cy="19" r="1.8"></circle></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- ================= DESKTOP PLAYER (unchanged) =================
+           Hidden on mobile entirely (see responsive.css) — the mobile full
+           player above covers that. -->
+      <div class="now-playing" id="nowPlayingTap">
+        <!-- #nowPlayingArtSlot wraps the three mutually-exclusive "what's
+             showing in the art spot" elements (art image, fallback note
+             icon, inline lyrics) so the mobile expanded layout can center
+             whichever one is visible as a single flexible group, rather
+             than trying to make flex:1 work directly on an <img> with
+             fixed dimensions. display:contents by default (see
+             responsive.css) makes this wrapper invisible to desktop's
+             layout — nothing about desktop's row changes. -->
+        <div id="nowPlayingArtSlot">
+          <img id="playerArt" class="player-art hidden" alt="">
+          <span id="playerArtIcon" class="player-art-icon">🎵</span>
+        </div>
         <div class="now-playing-text">
           <div class="marquee-wrap"><div class="track-name" id="trackName"><span></span></div></div>
           <div class="marquee-wrap"><div class="track-path" id="trackPath"><span></span></div></div>
@@ -139,9 +305,12 @@
         <button id="shuffleBtn" title="Shuffle queue">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-shuffle"></use></svg>
         </button>
-        <button id="prevBtn" title="Previous">⏮</button>
-        <button id="playPauseBtn" title="Play/Pause">▶</button>
-        <button id="nextBtn" title="Next">⏭</button>
+        <button id="prevBtn" title="Previous"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><use href="#icon-prev"></use></svg></button>
+        <button id="playPauseBtn" title="Play/Pause">
+          <svg class="icon-play" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><use href="#icon-play"></use></svg>
+          <svg class="icon-pause hidden" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><use href="#icon-pause"></use></svg>
+        </button>
+        <button id="nextBtn" title="Next"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><use href="#icon-next"></use></svg></button>
         <button id="loopBtn" title="Loop: off"></button>
         <span class="time" id="timeDisplay">0:00 / -0:00</span>
         <input type="range" id="seekBar" min="0" max="100" step="0.01" value="0">
@@ -154,9 +323,9 @@
           <svg id="muteIconOff" class="hidden" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="3 9 8 9 13 4 13 20 8 15 3 15 3 9"></polygon><line x1="16" y1="9" x2="22" y2="15"></line><line x1="22" y1="9" x2="16" y2="15"></line></svg>
         </button>
         <input type="range" id="volumeBar" min="0" max="100" value="100" title="Volume">
-        <button id="openFolderBtn" title="Open containing folder"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-folder"></use></svg></button>
-        <button id="deleteTrackBtn" title="Delete this track"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-trash"></use></svg></button>
-        <button id="closePlayerBtn" title="Close player">✕</button>
+        <button id="openFolderBtn" title="Open containing folder"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-folder"></use></svg></button>
+        <button id="deleteTrackBtn" title="Delete this track"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-trash"></use></svg></button>
+        <button id="closePlayerBtn" title="Close player"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
       </div>
       <audio id="audioEl"></audio>
     </footer>
@@ -198,19 +367,19 @@
         <span id="metaFileCounter" class="meta-file-counter"></span>
       </div>
       <div class="meta-file-nav">
-        <button id="metaPrevBtn" title="Previous file">◀</button>
+        <button id="metaPrevBtn" title="Previous file"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-chevron-left"></use></svg></button>
         <input type="text" id="metaFilename" placeholder="Filename" autocomplete="off">
-        <button id="metaNextBtn" title="Next file">▶</button>
+        <button id="metaNextBtn" title="Next file"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-chevron-right"></use></svg></button>
       </div>
       <div class="meta-body">
         <div class="meta-art-panel">
           <div class="meta-art-preview">
             <img id="metaArtImg" class="meta-art hidden" alt="">
-            <div id="metaArtPlaceholder" class="meta-art-placeholder">🎵</div>
+            <div id="metaArtPlaceholder" class="meta-art-placeholder"><svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-music-note"></use></svg></div>
             <div id="metaArtSplit" class="meta-art-split hidden">
               <div class="meta-art-split-half">
                 <img id="metaArtOldImg" class="hidden" alt="">
-                <div id="metaArtOldPlaceholder" class="meta-art-placeholder">🎵</div>
+                <div id="metaArtOldPlaceholder" class="meta-art-placeholder"><svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-music-note"></use></svg></div>
               </div>
               <div class="meta-art-split-half meta-art-split-new">
                 <img id="metaArtNewImg" alt="">
@@ -224,9 +393,9 @@
           </div>
           <label class="meta-art-broadcast" id="metaArtBroadcastWrap" title="Apply this image to every selected file"><input type="checkbox" id="metaArtBroadcastChk"> Use this image</label>
           <div class="meta-art-nav">
-            <button id="metaArtPrevBtn" title="Previous art">◀</button>
+            <button id="metaArtPrevBtn" title="Previous art"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-chevron-left"></use></svg></button>
             <span id="metaArtIndex" class="meta-art-index"></span>
-            <button id="metaArtNextBtn" title="Next art">▶</button>
+            <button id="metaArtNextBtn" title="Next art"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-chevron-right"></use></svg></button>
           </div>
           <div id="metaArtChangedCount" class="meta-art-changed-count"></div>
           <input type="file" id="metaArtInput" accept="image/jpeg,image/png" hidden>
@@ -266,18 +435,16 @@
       <div class="settings-title">Settings</div>
 
       <div class="settings-row">
-        <label for="seekBackInput">Rewind (left arrow)</label>
+        <label for="seekBackInput">Rewind (s)</label>
         <div class="settings-field">
           <input type="number" id="seekBackInput" min="1" max="300" step="1">
-          <span>s</span>
         </div>
       </div>
 
       <div class="settings-row">
-        <label for="seekForwardInput">Fast-forward (right arrow)</label>
+        <label for="seekForwardInput">Fast-forward (s)</label>
         <div class="settings-field">
           <input type="number" id="seekForwardInput" min="1" max="300" step="1">
-          <span>s</span>
         </div>
       </div>
 
@@ -313,6 +480,10 @@
         <button id="rebuildLibraryBtn">Update library metadata</button>
       </div>
 
+      <div class="settings-row settings-row-auth-mobile">
+        <button id="settingsAuthBtn"></button>
+      </div>
+
       <div class="modal-actions">
         <button id="settingsCloseBtn">Close</button>
       </div>
@@ -321,6 +492,17 @@
 
   <div id="toast" class="toast"></div>
 
-<script src="app.js"></script>
+<script src="js/state.js"></script>
+    <script src="js/selection.js"></script>
+    <script src="js/browse.js"></script>
+    <script src="js/filelist.js"></script>
+    <script src="js/playback.js"></script>
+    <script src="js/controls.js"></script>
+    <script src="js/queue-playlists.js"></script>
+    <script src="js/filemanagement.js"></script>
+    <script src="js/uploads.js"></script>
+    <script src="js/settings-auth-toast-lyrics.js"></script>
+    <script src="js/metadata-editor.js"></script>
+    <script src="js/layout-init.js"></script>
 </body>
 </html>

@@ -1,0 +1,48 @@
+/* ---------------------------------------------------------------------------
+   settings.css — Settings modal and the spinning cog icon on the settings
+   button.
+   --------------------------------------------------------------------------- */
+
+#settingsCogIcon { display: block; }
+#settingsCogIcon.spinning { animation: settings-spin 1s linear infinite; }
+@keyframes settings-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.settings-modal { width: 340px; }
+.settings-title { font-size: 15px; font-weight: 700; margin-bottom: 14px; }
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid #35353a;
+}
+.settings-row label { font-size: 13px; color: #e8e8ea; }
+.settings-field { display: flex; align-items: center; gap: 6px; }
+.settings-field span { font-size: 12px; color: #a8a8ae; }
+.settings-modal input[type="number"] {
+  width: 64px;
+  padding: 6px 8px;
+  margin: 0;
+  text-align: center;
+}
+.settings-row-checkbox input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+}
+.settings-modal .modal-actions { margin-top: 6px; }
+.settings-row-buttons { justify-content: center; gap: 8px; border-bottom: none; padding-top: 14px; }
+.settings-row-buttons button {
+  background: #2a2a2e;
+  border: none;
+  color: #e8e8ea;
+  padding: 7px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+@media (hover: hover) { .settings-row-buttons button:hover { background: #35353a; } }
+.settings-row-buttons button:disabled { opacity: 0.6; cursor: default; }
