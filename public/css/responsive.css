@@ -509,11 +509,12 @@
     grid-template-rows: 1fr auto auto auto auto auto auto;
     row-gap: 14px;
     width: 100%;
+    min-width: 0;
     min-height: 0;
     flex: 1;
     padding-bottom: 10px;
   }
-  .fp-row { display: flex; align-items: center; justify-content: center; }
+  .fp-row { display: flex; align-items: center; justify-content: center; min-width: 0; }
 
   .fp-row-art { min-height: 0; position: relative; }
 
@@ -551,10 +552,16 @@
     opacity: 0;
     pointer-events: none;
     transform: translateY(-50%) scale(0.85);
-    transition: opacity 0.2s ease, transform 0.2s ease;
+    transition: opacity 0.2s ease, transform 0.2s ease, color 0.15s ease;
     z-index: 1;
   }
   .fp-art-seek-indicator.visible { opacity: 1; transform: translateY(-50%) scale(1); }
+  /* Colored in the accent color once the drag has actually reached the
+     full-slide threshold that triggers the seek on release (see
+     applySeek()'s revealFrac check in layout-init.js — kept in sync with
+     that same threshold) — a clear "this will fire if you let go now"
+     signal, distinct from the neutral color shown while still short of it. */
+  .fp-art-seek-indicator.will-trigger { color: var(--accent-color); }
   .fp-art-seek-indicator-arc { position: absolute; top: 0; left: 0; }
   .fp-art-seek-indicator-num { position: relative; font-size: 11px; font-weight: 600; line-height: 1; }
   /* Backward circle sits to the left of center (revealed as art slides
@@ -596,9 +603,28 @@
   #mobileLyricsLines .lyrics-line { font-size: 14px; line-height: 1.9; color: #c8c8ce; }
   #mobileLyricsLines .lyrics-line.active { color: #e8e8ea; font-weight: 600; }
 
-  .fp-row-title { flex-direction: column; text-align: center; }
-  .fp-title { font-size: 18px; font-weight: 600; color: #e8e8ea; line-height: 1.2; }
-  .fp-subtitle { font-size: 13px; color: #a8a8ae; line-height: 1.2; }
+  .fp-row-title { flex-direction: column; text-align: center; width: 100%; min-width: 0; padding: 0 16px; }
+  .fp-title {
+    font-size: 18px;
+    font-weight: 600;
+    color: #e8e8ea;
+    line-height: 1.2;
+    width: 100%;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .fp-subtitle {
+    font-size: 13px;
+    color: #a8a8ae;
+    line-height: 1.2;
+    width: 100%;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 
   .fp-row-seek { padding: 0 4px; margin-top: 14px; }
   #fpSeekBar {

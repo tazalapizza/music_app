@@ -93,10 +93,12 @@ const MARQUEE_SPEED = 40;   // px per second, same for both lines
 const MARQUEE_GAP = 40;     // px of blank space before text reappears
 const MARQUEE_HOLD = 1000;  // ms held at the start position each cycle
 let marqueeRAF = null;
+let marqueeToken = 0;
 
 function stopMarquee() {
   if (marqueeRAF) cancelAnimationFrame(marqueeRAF);
   marqueeRAF = null;
+  marqueeToken++;
 }
 
 function startMarquee(nameSpan, pathSpan) {
@@ -105,7 +107,15 @@ function startMarquee(nameSpan, pathSpan) {
   nameSpan.style.transform = 'translateX(0)';
   pathSpan.style.transform = 'translateX(0)';
 
+  // Guards against a stale pending measurement winning a race if
+  // startMarquee() is called again before this call's own
+  // requestAnimationFrame callback has fired (stopMarquee() above only
+  // cancels an already-running frame() loop via marqueeRAF, not a still-
+  // pending initial measurement callback, since that callback doesn't get
+  // assigned to marqueeRAF until it actually runs).
+  const token = ++marqueeToken;
   requestAnimationFrame(() => {
+    if (token !== marqueeToken) return; // superseded by a newer startMarquee() call
     const nameWrap = nameSpan.closest('.marquee-wrap');
     const pathWrap = pathSpan.closest('.marquee-wrap');
     const nameOverflow = nameSpan.scrollWidth - nameWrap.clientWidth;
@@ -123,6 +133,7 @@ function startMarquee(nameSpan, pathSpan) {
 
     let start = null;
     function frame(ts) {
+      if (token !== marqueeToken) return; // superseded — stop silently
       if (start === null) start = ts;
       const t = (ts - start) % cycle;
 
@@ -250,7 +261,16 @@ function playCurrent() {
   updatePlayingHighlight();
   loadLyricsForTrack(track.path);
   getMeta(track.path).then(meta => {
-    applyMeta(meta);
+    // If metadata was already cached above, applyMeta() (and its
+    // startMarquee() call) already ran synchronously with the same data —
+    // calling it again here would race startMarquee()'s own pending
+    // requestAnimationFrame measurement callback against this second call
+    // (stopMarquee() only cancels an already-running frame loop, not a
+    // still-pending initial measurement), which could leave the marquee
+    // measuring stale/placeholder text and silently exiting instead of
+    // ever animating the real title. applyReplayGain still needs to run
+    // every time regardless.
+    if (!cachedMeta) applyMeta(meta);
     applyReplayGain(meta.replayGainDb);
   });
   setPlayPauseIcon(true);

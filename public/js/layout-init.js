@@ -36,6 +36,223 @@ if (window.navigator.standalone || window.matchMedia('(display-mode: standalone)
   window.addEventListener('orientationchange', () => setTimeout(forceSafeAreaRecalc, 300));
 }
 
+// ---------- Generic overflow marquee (site-wide) ----------
+// Reusable equivalent of the player bar's hand-built, two-span-synced
+// marquee (see startMarquee/MARQUEE_* in playback.js — that one is a
+// different, correlated case: title+path always scroll together, so it's
+// kept separate rather than forced through this generic single-element
+// path). This covers every other truncated text spot in the app: file
+// list rows, library/album names, queue/playlist items, upload names,
+// the metadata-editor dropdown, and the full-player/mini-player/upcoming-
+// track rows.
+//
+// Targets are given as [selector, { wrapWhole }] pairs:
+//   wrapWhole: true  → the selector's own text becomes the scrolling span
+//                       (wrapped in one automatically if it's plain text).
+//   wrapWhole: false → the selector already contains exactly the element
+//                       meant to scroll (e.g. .cell-text inside
+//                       .file-title) — that child is used directly rather
+//                       than double-wrapping.
+const MARQUEE_TARGETS = [
+  ['.lib-name', true],
+  ['.album-card-name', true],
+  ['.file-name', true],
+  ['.file-title .cell-text, .file-artist .cell-text, .file-album .cell-text', false],
+  ['.meta-field-dropdown-item', true],
+  ['.upload-item-name', true],
+  ['.queue-item > span:nth-child(2), .playlist-item > span:nth-child(2)', true],
+  ['.playlist-name', true],
+  ['.mini-player-title', true],
+  ['.mini-player-subtitle', true],
+  ['.fp-title', true],
+  ['.fp-subtitle', true],
+  ['.fp-upcoming-title', true],
+  ['.fp-upcoming-subtitle', true],
+];
+
+function ensureMarqueeSpan(el, wrapWhole) {
+  if (wrapWhole) {
+    if (!el.classList.contains('marquee-generic')) {
+      el.classList.add('marquee-generic');
+    }
+    // Plain-text element (or one with simple inline content like the
+    // queue-item's icon-free text span) — wrap its current contents in a
+    // single span the CSS can translate. Guards against re-wrapping an
+    // already-wrapped element (idempotent across re-renders that reuse
+    // the same DOM node) by checking for a single existing span child.
+    if (el.children.length === 1 && el.children[0].tagName === 'SPAN' && !el.children[0].children.length) {
+      return { container: el, span: el.children[0] };
+    }
+    const span = document.createElement('span');
+    span.append(...el.childNodes);
+    el.appendChild(span);
+    return { container: el, span };
+  }
+  // wrapWhole === false: the selector points directly at an element that
+  // is itself already the "span" (e.g. .cell-text, which already sits
+  // inside its own clipping parent like .file-title — see filelist.css).
+  // Marking the *parent* as the marquee container and animating .cell-text
+  // itself, rather than double-wrapping — .cell-text has its own
+  // overflow:hidden for the static-ellipsis state, and the parent is
+  // what's actually fixed-width, so it's the correct clipping box for the
+  // scrolling state too.
+  const container = el.parentElement;
+  if (!container) return null;
+  container.classList.add('marquee-generic-inline');
+  return { container, span: el };
+}
+
+// container → { span, distance } for every element currently measured as
+// overflowing, regardless of whether it's actively scrolling right now —
+// the shared clock below decides who actually participates each cycle
+// (hover-filtered on desktop, everyone on mobile).
+const overflowingMarquees = new Map();
+
+function measureMarquee(container, span) {
+  const overflow = span.scrollWidth - container.clientWidth;
+  if (overflow > 4) {
+    // Small gap so the text fully clears the box before looping back.
+    overflowingMarquees.set(container, { span, distance: overflow + 24 });
+    container.classList.add('marquee-overflowing');
+  } else {
+    overflowingMarquees.delete(container);
+    container.classList.remove('marquee-overflowing');
+    container.style.transform = '';
+    if (span) span.style.transform = '';
+  }
+}
+
+function scanMarquees(root = document) {
+  MARQUEE_TARGETS.forEach(([selector, wrapWhole]) => {
+    root.querySelectorAll(selector).forEach(el => {
+      const result = ensureMarqueeSpan(el, wrapWhole);
+      if (!result) return;
+      measureMarquee(result.container, result.span);
+    });
+  });
+}
+
+// ---------- Shared marquee clock ----------
+// Every visible, currently-active marquee must start scrolling at the same
+// moment, hold at the end together, and only loop back to the start once
+// every one of them has finished — not each on its own independent timer.
+// A per-element CSS animation can't express "wait for the slowest one" (see
+// the comment in base.css), so this drives every element's transform
+// directly from one requestAnimationFrame loop instead.
+const MARQUEE_SPEED_PX_S = 40;   // matches the player bar's own MARQUEE_SPEED, for a consistent feel
+const MARQUEE_START_HOLD = 800;  // ms every element sits at its start position before the group moves
+const MARQUEE_END_HOLD = 800;    // ms every element sits at its finished position once the slowest one arrives
+let marqueeClockRAF = null;
+let marqueeClockStart = null;
+let currentlyActiveSpans = new Set();
+
+function activeMarqueeEntries() {
+  // On desktop (hover-capable), only elements currently under the pointer
+  // scroll — matches the "static ellipsis at rest, hover to read" intent.
+  // On touch, there's no hover concept, so everything overflowing and
+  // actually rendered participates automatically.
+  const isHoverCapable = window.matchMedia('(hover: hover)').matches;
+  const entries = [];
+  overflowingMarquees.forEach(({ span, distance }, container) => {
+    if (container.getClientRects().length === 0) return; // detached or display:none somewhere up the tree
+    if (isHoverCapable && !container.matches(':hover')) return;
+    entries.push({ container, span, distance });
+  });
+  return entries;
+}
+
+function runMarqueeClock(ts) {
+  const entries = activeMarqueeEntries();
+
+  // .marquee-active neutralizes a span's own overflow:hidden/ellipsis (see
+  // base.css) for exactly the elements currently participating — needed
+  // for the wrapWhole:false case (e.g. .cell-text), which clips and
+  // ellipsizes its own content independently of any transform applied to
+  // it. Only toggled on actual set changes, not every frame. Any span
+  // leaving the active set (mouse moved away, element scrolled out of
+  // view, etc.) is snapped back to its start position immediately rather
+  // than left wherever it was mid-scroll — leaving a stale transform in
+  // place would show visibly shifted/clipped text once .marquee-active is
+  // removed and the element's own ellipsis clipping takes back over.
+  const nextActive = new Set(entries.map(e => e.span));
+  currentlyActiveSpans.forEach(span => {
+    if (!nextActive.has(span)) {
+      span.classList.remove('marquee-active');
+      span.style.transform = '';
+    }
+  });
+  nextActive.forEach(span => { if (!currentlyActiveSpans.has(span)) span.classList.add('marquee-active'); });
+  currentlyActiveSpans = nextActive;
+
+  if (entries.length === 0) {
+    marqueeClockStart = null;
+    marqueeClockRAF = requestAnimationFrame(runMarqueeClock);
+    return;
+  }
+  if (marqueeClockStart === null) marqueeClockStart = ts;
+
+  // One shared cycle: every element scrolls at the same px/s speed, so the
+  // element with the longest distance to travel defines how long the
+  // "moving" phase lasts — shorter elements simply arrive early and sit at
+  // their own finished position (translateX(-distance)) until the slowest
+  // one catches up, which is what keeps the whole group visually
+  // finishing together rather than each snapping back independently.
+  const maxDistance = Math.max(...entries.map(e => e.distance));
+  const scrollDuration = (maxDistance / MARQUEE_SPEED_PX_S) * 1000;
+  const cycle = MARQUEE_START_HOLD + scrollDuration + MARQUEE_END_HOLD;
+  const t = (ts - marqueeClockStart) % cycle;
+
+  entries.forEach(({ container, span, distance }) => {
+    let x;
+    if (t < MARQUEE_START_HOLD) {
+      x = 0;
+    } else {
+      // Every element moves at the same speed; clamped to its own distance
+      // so a short element simply arrives early and holds at its finished
+      // position (rather than overshooting) while the group's shared
+      // `cycle` keeps waiting on the slowest element to finish too.
+      const elapsedMove = Math.min(t - MARQUEE_START_HOLD, scrollDuration);
+      x = -Math.min(distance, (elapsedMove / 1000) * MARQUEE_SPEED_PX_S);
+    }
+    span.style.transform = `translateX(${x}px)`;
+  });
+
+  marqueeClockRAF = requestAnimationFrame(runMarqueeClock);
+}
+marqueeClockRAF = requestAnimationFrame(runMarqueeClock);
+
+// Elements gain/lose ':hover' outside of any DOM mutation, so the clock
+// can't rely solely on the MutationObserver below to know when to start/
+// stop a group — mouseenter/mouseleave on the whole document (capture
+// phase, since these don't bubble) just needs to keep the RAF loop aware
+// that its active set may have changed, which it already re-derives every
+// frame via activeMarqueeEntries() — no extra state to sync here beyond
+// making sure hover changes are visible to the next frame, which they are
+// automatically via :hover in CSS/matches(':hover').
+
+// Re-scan on any DOM change anywhere (file list re-renders on navigation,
+// queue/playlist re-render on reorder, uploads list grows, etc.) rather
+// than hooking every individual render function across five different
+// files — debounced since these can fire in rapid bursts (e.g. an entire
+// file list re-rendering row by row).
+let marqueeScanTimer = null;
+new MutationObserver(() => {
+  clearTimeout(marqueeScanTimer);
+  marqueeScanTimer = setTimeout(() => scanMarquees(), 120);
+}).observe(document.body, { childList: true, subtree: true, characterData: true });
+
+// Column resizing, sidebar resizing, and window resizing all change
+// available width without necessarily adding/removing any DOM nodes (so
+// the MutationObserver above wouldn't catch them) — re-measure (not
+// re-wrap) on those too.
+let marqueeResizeTimer = null;
+window.addEventListener('resize', () => {
+  clearTimeout(marqueeResizeTimer);
+  marqueeResizeTimer = setTimeout(() => scanMarquees(), 150);
+});
+
+scanMarquees();
+
 // ---------- Resizable layout (column widths + sidebar width) ----------
 const COL_MIN_WIDTHS = { title: 80, artist: 60, album: 60, duration: 50, size: 50 };
 const SIDEBAR_MIN = 220;
@@ -278,6 +495,18 @@ function togglePlayerExpanded(force) {
   // (which no longer has a transform of its own — see the comments there
   // on why duplicating it broke the whole player down to just the blur).
   document.querySelector('.player-blur-group').classList.toggle('expanded', willExpand);
+  // Expanding reveals the full player's title/subtitle/upcoming-track text
+  // for the first time since (or ever since) the current track started —
+  // if the track changed while collapsed, .fp-title/.fp-subtitle were
+  // re-synced via textContent/innerHTML (see syncFpTitle) while hidden,
+  // which wipes any marquee wrapper span and is invisible to the
+  // childList/characterData MutationObserver that normally triggers a
+  // rescan (that observer does see the change itself, but getClientRects()
+  // was still empty at that moment since the full player was hidden, so
+  // the resulting measurement found "no overflow" and never marked it
+  // active). Re-scanning right on expand catches it now that it's
+  // actually visible and measurable.
+  if (willExpand) scanMarquees();
 }
 // Tapping anywhere on the mini player (art/title/subtitle) opens the full
 // player — except its own buttons, which have their own actions.
@@ -443,6 +672,12 @@ function syncMiniPlayerText() {
       setMobileTab('files');
     });
   });
+  // textContent/innerHTML above wipe any marquee wrapper <span>
+  // scanMarquees() previously created around these two — re-wrap/re-
+  // measure immediately against the new text rather than waiting on the
+  // generic debounced observer (which may also be looking at an element
+  // that's momentarily hidden, e.g. mid player-bar drag transition).
+  scanMarquees(miniPlayerEl);
 }
 new MutationObserver(syncMiniPlayerArt).observe(realPlayerArt, { attributes: true, attributeFilter: ['class', 'src'] });
 new MutationObserver(syncMiniPlayerText).observe(realTrackName, { childList: true, characterData: true, subtree: true });
@@ -539,6 +774,12 @@ function syncFpTitle() {
       togglePlayerExpanded(false);
     });
   });
+  // textContent/innerHTML above wipe any marquee wrapper <span>
+  // scanMarquees() previously created around these two — re-wrap/re-
+  // measure immediately (togglePlayerExpanded also triggers a scan on
+  // open, but the track can change while already expanded too, which
+  // this covers). .fp-row-title is fpTitle/fpSubtitle's shared parent.
+  scanMarquees(document.querySelector('.fp-row-title') || document);
 }
 new MutationObserver(syncFpArt).observe(realPlayerArt, { attributes: true, attributeFilter: ['class', 'src'] });
 new MutationObserver(syncFpTitle).observe(realTrackName, { childList: true, characterData: true, subtree: true });
@@ -597,6 +838,14 @@ function syncFpUpcoming() {
       fpUpcomingArt.classList.add('hidden');
       fpUpcomingArtIcon.classList.remove('hidden');
     }
+    // Setting .textContent directly above wipes any marquee wrapper <span>
+    // scanMarquees() previously created around fpUpcomingTitle/Subtitle —
+    // the generic MutationObserver does see this and would eventually
+    // re-wrap it, but only after its 120ms debounce, and only if the row
+    // happens to already be visible at that exact moment. Calling it here
+    // directly re-wraps/re-measures immediately against the real,
+    // now-current text rather than depending on that timing.
+    scanMarquees(fpUpcomingRow);
   });
 }
 new MutationObserver(syncFpUpcoming).observe(realTrackName, { childList: true, characterData: true, subtree: true });
@@ -677,6 +926,11 @@ mirrorButton(document.getElementById('fpShuffleBtn'), document.getElementById('s
   const forwardNum = document.getElementById('fpArtSeekForwardNum');
 
   const MAX_DRAG = 70; // px — how far the art can actually slide
+  // Fraction of MAX_DRAG the drag must reach before release actually
+  // triggers a seek — shared between setIndicators() (visual "will-trigger"
+  // feedback) and applySeek() (the actual trigger) so they can't drift out
+  // of sync with each other.
+  const TRIGGER_THRESHOLD = 0.95;
   let dragging = false;
   let startX = 0;
   let offsetX = 0;
@@ -686,31 +940,42 @@ mirrorButton(document.getElementById('fpShuffleBtn'), document.getElementById('s
     // offset < 0 → art moved left → forward (skip ahead) revealed on the right
     // offset > 0 → art moved right → backward (skip back) revealed on the left
     const revealFrac = Math.min(1, Math.abs(offset) / MAX_DRAG);
+    const willTrigger = revealFrac >= TRIGGER_THRESHOLD;
     if (offset < 0) {
       forwardNum.textContent = settings.seekForward;
       forwardIndicator.classList.toggle('visible', revealFrac > 0.15);
+      forwardIndicator.classList.toggle('will-trigger', willTrigger);
       backIndicator.classList.remove('visible');
+      backIndicator.classList.remove('will-trigger');
     } else if (offset > 0) {
       backNum.textContent = settings.seekBack;
       backIndicator.classList.toggle('visible', revealFrac > 0.15);
+      backIndicator.classList.toggle('will-trigger', willTrigger);
       forwardIndicator.classList.remove('visible');
+      forwardIndicator.classList.remove('will-trigger');
     } else {
       forwardIndicator.classList.remove('visible');
       backIndicator.classList.remove('visible');
+      forwardIndicator.classList.remove('will-trigger');
+      backIndicator.classList.remove('will-trigger');
     }
   }
 
   function resetArt() {
     dragWrap.classList.remove('dragging');
     dragWrap.style.transform = 'translateX(0px)';
-    backIndicator.classList.remove('visible');
-    forwardIndicator.classList.remove('visible');
+    backIndicator.classList.remove('visible', 'will-trigger');
+    forwardIndicator.classList.remove('visible', 'will-trigger');
   }
 
   function applySeek(offset) {
     if (!audioEl.duration || !isFinite(audioEl.duration)) return;
+    // Only triggers on a full slide (dragged all the way to MAX_DRAG), not
+    // a partial/half slide — small threshold below 1 to comfortably
+    // account for the pointer letting go a pixel or two shy of the exact
+    // clamp, rather than requiring pixel-perfect precision from the user.
     const revealFrac = Math.abs(offset) / MAX_DRAG;
-    if (revealFrac <= 0.15) return; // treat as a tap/negligible drag, not a seek
+    if (revealFrac < TRIGGER_THRESHOLD) return;
     if (offset < 0) {
       audioEl.currentTime = Math.min(audioEl.duration, audioEl.currentTime + settings.seekForward);
     } else {

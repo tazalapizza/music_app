@@ -157,3 +157,49 @@ input[type="checkbox"]:indeterminate::after {
   height: 2px;
   background: var(--accent-color);
 }
+
+/* ---------------------------------------------------------------------------
+   Generic overflow marquee — reusable site-wide equivalent of the player
+   bar's .marquee-wrap (player.css), which is hand-built for exactly two
+   synced spans (title+path) and isn't reusable as-is for single, unrelated
+   pieces of text elsewhere (queue items, file names, playlist names, etc).
+
+   No CSS animation here on purpose — every overflowing+visible element on
+   screen must scroll in lockstep (start together, hold together, and only
+   loop back to start once every one of them has finished), which a
+   per-element CSS @keyframes animation can't express since each element's
+   scroll distance/duration naturally differs. Driven entirely by
+   runGlobalMarqueeClock() in layout-init.js instead: a single shared
+   requestAnimationFrame loop sets transform directly on every active
+   element using one shared cycle length (the slowest element's duration),
+   so they all move and pause as one group regardless of individual text
+   length. This class just establishes the clipping box + the span that
+   gets a transform written to it every frame.
+
+   Desktop: scrolls on hover only (a static ellipsis at rest is calmer for
+   a page with many rows, and hover is a natural "I want to read this"
+   signal that touch devices don't have) — see marquee-hover-active in
+   layout-init.js.
+   Mobile: scrolls automatically after a brief pause, since there's no
+   hover — gated by the (hover: none) media query already used elsewhere
+   in this codebase (responsive.css) for the same touch/no-touch split.
+--------------------------------------------------------------------------- */
+.marquee-generic { overflow: hidden; white-space: nowrap; position: relative; display: block; }
+.marquee-generic > span { display: inline-block; will-change: transform; }
+/* wrapWhole:false case (e.g. .file-title wrapping .cell-text): the
+   container becomes the clipping box, exactly like .marquee-generic above.
+   Its child (.cell-text) has its own overflow:hidden/text-overflow:
+   ellipsis for the static, non-hovered/non-active state — but once it
+   becomes the actively-scrolling "span" for a marquee, self-clipping and
+   showing "…" instead of the real text made the translate() applied to it
+   invisible (an element can't visibly scroll past its own overflow:hidden
+   boundary). marquee-active neutralizes that for exactly the moment it's
+   actually being animated. */
+.marquee-generic-inline { overflow: hidden; white-space: nowrap; position: relative; display: block; }
+.marquee-generic-inline > .marquee-active {
+  display: inline-block;
+  overflow: visible;
+  text-overflow: clip;
+  max-width: none;
+  will-change: transform;
+}
