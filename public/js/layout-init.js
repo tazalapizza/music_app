@@ -63,11 +63,8 @@ const MARQUEE_TARGETS = [
   ['.queue-item > span:nth-child(2), .playlist-item > span:nth-child(2)', true],
   ['.playlist-name', true],
   ['.mini-player-title', true],
-  ['.mini-player-subtitle', true],
   ['.fp-title', true],
-  ['.fp-subtitle', true],
   ['.fp-upcoming-title', true],
-  ['.fp-upcoming-subtitle', true],
 ];
 
 function ensureMarqueeSpan(el, wrapWhole) {
@@ -470,13 +467,21 @@ setMobileTab('files');
 // padding (nav only, vs nav + player bar) without duplicating that logic.
 // Also: the first time the bar goes from hidden to visible (a track just
 // started playing) on mobile, open it full screen automatically rather
-// than leaving the person to notice and tap the mini strip.
+// than leaving the person to notice and tap the mini strip — unless the
+// caller opted out via window.suppressNextAutoExpand (see playWholePlaylist
+// in queue-playlists.js: playing a playlist from the sidebar list should
+// start playback and unfold the playlist in place, not jump away to the
+// full player).
 let wasPlayerHidden = playerBarEl.classList.contains('hidden');
 const playerBarObserver = new MutationObserver(() => {
   const isHidden = playerBarEl.classList.contains('hidden');
   appEl.classList.toggle('has-player', !isHidden);
   if (wasPlayerHidden && !isHidden && window.matchMedia('(max-width: 780px)').matches) {
-    togglePlayerExpanded(true);
+    if (window.suppressNextAutoExpand) {
+      window.suppressNextAutoExpand = false;
+    } else {
+      togglePlayerExpanded(true);
+    }
   }
   wasPlayerHidden = isHidden;
 });
@@ -825,10 +830,24 @@ function syncFpUpcoming() {
     const stillNext = queueIndex >= 0 && queueIndex + 1 < queue.length && queue[queueIndex + 1].path === nextTrack.path;
     if (!stillNext) return;
     fpUpcomingTitle.textContent = meta.title || nextTrack.name;
-    // "Artist • Album", matching the subtitle format used elsewhere
-    // (mini/full player's own now-playing subtitle) rather than showing
-    // only the artist.
-    fpUpcomingSubtitle.textContent = [meta.artist, meta.album].filter(Boolean).join(' • ');
+    // Artist and album on their own line each, same as the now-playing
+    // subtitle (see applyMeta in playback.js) rather than one "Artist •
+    // Album" line — plain text here since (unlike the now-playing
+    // subtitle) this preview row was never a set of clickable .pb-link
+    // spans to begin with.
+    fpUpcomingSubtitle.innerHTML = '';
+    if (meta.artist) {
+      const line = document.createElement('div');
+      line.className = 'pb-link-line';
+      line.textContent = meta.artist;
+      fpUpcomingSubtitle.appendChild(line);
+    }
+    if (meta.album) {
+      const line = document.createElement('div');
+      line.className = 'pb-link-line';
+      line.textContent = meta.album;
+      fpUpcomingSubtitle.appendChild(line);
+    }
     fpUpcomingDuration.textContent = (typeof meta.duration === 'number') ? formatTime(meta.duration) : '';
     if (meta.hasArt) {
       fpUpcomingArt.src = `/api/art?path=${encodeURIComponent(nextTrack.path)}`;
@@ -855,7 +874,18 @@ new MutationObserver(syncFpUpcoming).observe(realTrackName, { childList: true, c
 // "the next track changed because the queue was reordered" too, not just
 // "the current track changed" (which the trackName observer above covers).
 new MutationObserver(syncFpUpcoming).observe(queuePanel, { attributes: true, attributeFilter: ['class'], subtree: true });
-document.getElementById('fpUpcomingNextBtn').addEventListener('click', () => realNextBtn.click());
+document.getElementById('fpUpcomingNextBtn').addEventListener('click', (e) => {
+  e.stopPropagation(); // don't also trigger the row's own click below
+  realNextBtn.click();
+});
+// Tapping the row itself (art/title/duration, anywhere but the next
+// button above) opens the queue tab, same as tapping an artist/album
+// pb-link elsewhere in the full player — collapse back to the mini player
+// first so the queue is actually visible underneath.
+document.querySelector('.fp-upcoming-track').addEventListener('click', () => {
+  togglePlayerExpanded(false);
+  setMobileTab('queue');
+});
 syncFpUpcoming();
 
 // ---- Seek bar + split timers ----
@@ -925,7 +955,7 @@ mirrorButton(document.getElementById('fpShuffleBtn'), document.getElementById('s
   const forwardIndicator = document.getElementById('fpArtSeekForward');
   const forwardNum = document.getElementById('fpArtSeekForwardNum');
 
-  const MAX_DRAG = 70; // px — how far the art can actually slide
+  const MAX_DRAG = 40; // px — how far the art can actually slide
   // Fraction of MAX_DRAG the drag must reach before release actually
   // triggers a seek — shared between setIndicators() (visual "will-trigger"
   // feedback) and applySeek() (the actual trigger) so they can't drift out

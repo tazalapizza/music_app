@@ -484,4 +484,14 @@ function formatSize(bytes) {
   // index.html, never recreated — only .album-strip varies, handled above.
   document.querySelectorAll('.file-list, .upload-list').forEach(attach);
   document.querySelectorAll('.tab-panel').forEach(attach);
+  // .player-blur-group is mobile-only (the full-player scroll container —
+  // see responsive.css); also static and present at load, so it's safe to
+  // attach here unconditionally alongside the desktop-only elements above.
+  // The mousemove/mouseleave edge-hover half of attach() is simply inert on
+  // touch (no such events fire there), leaving just the scroll-triggered
+  // show/hide, which is exactly what's wanted on mobile too — this is what
+  // lets responsive.css gate every scrollbar's visibility on the same
+  // .scrollbar-active class desktop uses, rather than relying on each
+  // browser's own (inconsistent) native scrollbar fade.
+  document.querySelectorAll('.player-blur-group').forEach(attach);
 })();

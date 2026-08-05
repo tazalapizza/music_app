@@ -229,24 +229,30 @@ app.get('/api/browse', async (req, res) => {
 });
 
 // ---- Recursively list all audio files under a folder (for "add folder to queue/playlist") ----
+// Subdirectories are recursed into concurrently (Promise.all) rather than
+// one at a time — a folder with many nested subfolders previously paid for
+// every subfolder's readdir sequentially, one full round-trip after
+// another, which is what made "play folder" on a large/deeply-nested
+// library feel like it hung for several seconds before the first track
+// even started. Sibling entries have no ordering dependency on each other,
+// so there's nothing lost by kicking them all off at once; the recursive
+// re-sort below restores the original per-directory ordering afterward
+// exactly as before.
 async function listAudioRecursive(relPath) {
   const full = safeResolve(relPath);
   const stat = await fsp.stat(full);
   if (stat.isFile()) {
     return isAudio(relPath) ? [relPath] : [];
   }
-  let results = [];
-  const entries = await fsp.readdir(full, { withFileTypes: true });
-  for (const e of entries.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))) {
-    if (e.name.startsWith('.')) continue;
+  const entries = (await fsp.readdir(full, { withFileTypes: true }))
+    .filter(e => !e.name.startsWith('.'))
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+  const perEntryResults = await Promise.all(entries.map(async e => {
     const childRel = path.join(relPath, e.name);
-    if (e.isDirectory()) {
-      results = results.concat(await listAudioRecursive(childRel));
-    } else if (isAudio(e.name)) {
-      results.push(childRel);
-    }
-  }
-  return results;
+    if (e.isDirectory()) return listAudioRecursive(childRel);
+    return isAudio(e.name) ? [childRel] : [];
+  }));
+  return perEntryResults.flat();
 }
 
 app.get('/api/expand', async (req, res) => {
@@ -256,6 +262,66 @@ app.get('/api/expand', async (req, res) => {
     res.json({ files });
   } catch (err) {
     logIssue(`GET /api/expand?path=${req.query.path || ''} failed: ${err.message}`);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Finds a single audio file under a folder as fast as possible, for "play
+// folder" to start audible playback immediately instead of waiting on the
+// full recursive listing (see listAudioRecursive above) — that full walk
+// is unavoidably proportional to folder size, so for a folder with
+// thousands of files across many subfolders it's the entire multi-second
+// delay between the click and any sound.
+//
+// Preferred path: pick uniformly at random from libIndex, the in-memory
+// (and disk-persisted) full-library metadata map keyed by relative path —
+// see "LIBRARY INDEX" below. Filtering its already-loaded keys by path
+// prefix touches no filesystem at all, so this resolves essentially
+// instantly regardless of folder size, and gives an actually-random first
+// track rather than always the alphabetically-first one. libIndex is read
+// directly here (not through ensureLibraryIndex(), which can await a full
+// rescan if dirty) precisely because that potential rescan wait is exactly
+// what this needs to avoid; a slightly-stale index is fine for "give me
+// any playable file right now."
+//
+// Fallback: if the index has no entries under this folder yet (e.g.
+// nothing has triggered a library scan since server start, or the folder
+// was created since), fall back to a live filesystem search that stops at
+// the first audio file found instead of enumerating the whole subtree.
+function pickRandomIndexedFile(relPath) {
+  const prefix = relPath ? relPath.replace(/[\\/]+$/, '') + path.sep : '';
+  const candidates = Object.keys(libIndex).filter(p => !prefix || p.startsWith(prefix));
+  if (candidates.length === 0) return null;
+  return candidates[Math.floor(Math.random() * candidates.length)];
+}
+
+async function findFirstAudioFile(relPath) {
+  const full = safeResolve(relPath);
+  const stat = await fsp.stat(full);
+  if (stat.isFile()) return isAudio(relPath) ? relPath : null;
+  const entries = (await fsp.readdir(full, { withFileTypes: true }))
+    .filter(e => !e.name.startsWith('.'))
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+  for (const e of entries) {
+    if (!e.isDirectory() && isAudio(e.name)) return path.join(relPath, e.name);
+  }
+  for (const e of entries) {
+    if (e.isDirectory()) {
+      const found = await findFirstAudioFile(path.join(relPath, e.name));
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+app.get('/api/expand/first', async (req, res) => {
+  try {
+    const rel = req.query.path || '';
+    const indexed = pickRandomIndexedFile(rel);
+    const file = indexed || await findFirstAudioFile(rel);
+    res.json({ file });
+  } catch (err) {
+    logIssue(`GET /api/expand/first?path=${req.query.path || ''} failed: ${err.message}`);
     res.status(400).json({ error: err.message });
   }
 });

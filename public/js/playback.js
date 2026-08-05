@@ -81,10 +81,49 @@ function handleLibrarySongClick(item) {
 }
 
 async function playFolder(item) {
+  // The full recursive listing (listAudioRecursive on the server, behind
+  // /api/expand) is proportional to folder size — for a large/deeply
+  // nested folder that's a multi-second wait before anything could play,
+  // even after parallelizing the server's own directory walk. Since the
+  // user just wants to *hear something* the moment they click, this
+  // fetches a single file via the much cheaper /api/expand/first (stops at
+  // the first audio file found instead of enumerating the whole subtree)
+  // and starts playing that immediately, while the full listing continues
+  // in the background and backfills the rest of the queue once it's
+  // ready — see fillFolderQueueInBackground below.
+  const firstResult = await api(`/api/expand/first?path=${encodeURIComponent(item.path)}`);
+  if (!firstResult.file) { renderQueue(); return; } // empty folder
+  const firstTrack = { path: firstResult.file, name: fileNameOf(firstResult.file) };
+  resetQueue([firstTrack]);
+  queueIndex = 0;
+  playCurrent();
+  renderQueue();
+  fillFolderQueueInBackground(item, firstTrack);
+}
+
+// Loads the rest of a folder's tracks after playFolder() above has already
+// started the first one playing, then splices them in around it — shuffled
+// (folders start shuffled by default; see playFolder), with the track
+// that's already playing left in place rather than restarted, and
+// everything else randomized around it.
+async function fillFolderQueueInBackground(item, firstTrack) {
   const { files } = await api(`/api/expand?path=${encodeURIComponent(item.path)}`);
-  resetQueue(files.map(f => ({ path: f, name: fileNameOf(f) })));
-  queueIndex = queue.length ? 0 : -1;
-  if (queueIndex >= 0) playCurrent();
+  // The user may have already skipped away from the folder entirely
+  // (played something else, cleared the queue) by the time this resolves —
+  // don't clobber whatever's playing now with a stale folder's tracks.
+  if (!(queue.length === 1 && queue[0].path === firstTrack.path)) return;
+  const rest = files.filter(f => f !== firstTrack.path).map(f => ({ path: f, name: fileNameOf(f) }));
+  for (let i = rest.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [rest[i], rest[j]] = [rest[j], rest[i]];
+  }
+  const tracks = [firstTrack, ...rest];
+  resetQueue(tracks);
+  queueIndex = 0;
+  if (tracks.length > 1) {
+    shuffled = true;
+    updateShuffleBtnState();
+  }
   renderQueue();
 }
 
@@ -188,6 +227,15 @@ function hidePlayerBar() {
   seekBarEl.value = 0;
   seekBarEl.style.setProperty('--played-pct', '0%'); 
   seekBarEl.style.setProperty('--buffered-pct', '0%');
+  // Same reasoning as the equivalent reset in playCurrent(): #fpSeekBar
+  // only mirrors #seekBar via timeupdate/loadedmetadata, neither of which
+  // fires once playback has actually stopped.
+  const fpSeekBarStopEl = document.getElementById('fpSeekBar');
+  if (fpSeekBarStopEl) {
+    fpSeekBarStopEl.value = 0;
+    fpSeekBarStopEl.style.setProperty('--played-pct', '0%');
+    fpSeekBarStopEl.style.setProperty('--buffered-pct', '0%');
+  }
   const artImg = document.getElementById('playerArt');
   const artIcon = document.getElementById('playerArtIcon');
   artImg.classList.add('hidden');
@@ -205,6 +253,19 @@ function playCurrent() {
   audioEl.src = `/api/stream?path=${encodeURIComponent(track.path)}`;
   seekBarEl.value = 0;
   seekBarEl.style.setProperty('--played-pct', '0%'); seekBarEl.style.setProperty('--buffered-pct', '0%');
+  // #fpSeekBar (mobile full player) only mirrors #seekBar inside
+  // updateFpTimeDisplay, which runs on the audio element's own
+  // timeupdate/loadedmetadata events — those don't fire until the new
+  // track has actually started loading/playing, so without this it kept
+  // showing the previous track's position for a beat after switching.
+  // Resetting it here directly, synchronously alongside the real bar,
+  // closes that gap instead of waiting on playback to catch up.
+  const fpSeekBarEl = document.getElementById('fpSeekBar');
+  if (fpSeekBarEl) {
+    fpSeekBarEl.value = 0;
+    fpSeekBarEl.style.setProperty('--played-pct', '0%');
+    fpSeekBarEl.style.setProperty('--buffered-pct', '0%');
+  }
   audioEl.playbackRate = speeds[speedIndex];
   audioEl.play();
   showPlayerBar();
@@ -220,21 +281,36 @@ function playCurrent() {
     nameEl.querySelector('span').textContent = meta.title || track.name;
     const pathSpan = pathEl.querySelector('span');
     if (meta.artist || meta.album) {
+      // Artist and album render on their own line each (rather than one
+      // "Artist • Album" line) so pathEl.innerHTML — mirrored verbatim
+      // into #miniPlayerSubtitle/#fpSubtitle by layout-init.js — carries
+      // that same two-line structure everywhere it's reused. Each line is
+      // its own block-level .pb-link-line so CSS can ellipsis-truncate it
+      // independently; the player-bar's hand-built marquee (startMarquee,
+      // below) only scrolls the *first* line horizontally the same way it
+      // always scrolled the whole thing, since it has no notion of
+      // multi-line content — the second line relies on CSS ellipsis
+      // instead, same as every other truncated two-line label in the app.
       pathSpan.innerHTML = '';
       if (meta.artist) {
+        const line = document.createElement('div');
+        line.className = 'pb-link-line';
         const a = document.createElement('span');
         a.className = 'pb-link';
         a.textContent = meta.artist;
         a.addEventListener('click', () => openLibrary('artist', meta.artist));
-        pathSpan.appendChild(a);
+        line.appendChild(a);
+        pathSpan.appendChild(line);
       }
-      if (meta.artist && meta.album) pathSpan.appendChild(document.createTextNode(' • '));
       if (meta.album) {
+        const line = document.createElement('div');
+        line.className = 'pb-link-line';
         const al = document.createElement('span');
         al.className = 'pb-link';
         al.textContent = meta.album;
         al.addEventListener('click', () => openLibrary('album', meta.album));
-        pathSpan.appendChild(al);
+        line.appendChild(al);
+        pathSpan.appendChild(line);
       }
     } else {
       pathSpan.textContent = track.path;
@@ -724,14 +800,18 @@ function updatePlayerArt(trackPath) {
 
   sampleImg.onerror = () => {
     if (playerArtTrackPath !== trackPath) return;
-    document.documentElement.style.setProperty('--blur-opacity', '0');
+    // A track with no art shouldn't keep the *previous* track's accent
+    // color lingering everywhere it's used (buttons, scrollbars, etc.) —
+    // reset it back to the neutral default the same way applyBlurColors()
+    // does when called with no image at all.
+    applyBlurColors(null, null, null);
   };
 
   artImg.onerror = () => {
     if (playerArtTrackPath !== trackPath) return;
     artImg.classList.add('hidden');
     artIcon.classList.remove('hidden');
-    document.documentElement.style.setProperty('--blur-opacity', '0');
+    applyBlurColors(null, null, null);
   };
 
   artImg.src = artUrl;

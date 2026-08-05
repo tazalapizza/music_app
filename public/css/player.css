@@ -120,6 +120,11 @@
 .track-name { font-size: 13px; font-weight: 600; display: inline-block; }
 .track-path { font-size: 11px; color: #c8c8ce; display: inline-block; }
 .track-name span, .track-path span { display: inline-block; will-change: transform; }
+/* Artist and album render as two stacked lines (see applyMeta in
+   playback.js) inside the single span the marquee still translates as one
+   unit horizontally — .pb-link-line just stacks them vertically within
+   that span rather than changing how the marquee itself measures/moves. */
+.pb-link-line { display: block; line-height: 1.35; }
 #muteIconOn.hidden, #muteIconOff.hidden { display: none; }
 #closePlayerBtn { margin-left: 4px; }
 .player-controls { flex: 1; display: flex; align-items: center; gap: 10px; }
@@ -241,3 +246,14 @@ input[type="range"]::-moz-range-thumb {
 #seekBar::-webkit-slider-thumb, #volumeBar::-webkit-slider-thumb { background: var(--accent-color); }
 #seekBar::-moz-range-progress, #volumeBar::-moz-range-progress { background: var(--accent-color); }
 #seekBar::-moz-range-thumb, #volumeBar::-moz-range-thumb { background: var(--accent-color); }
+/* Seek bars (not volume) lose their draggable-looking dot — the filled
+   track itself already communicates progress, and the whole bar is still
+   click/drag-seekable via its own listeners regardless of whether a thumb
+   is rendered on top of it. */
+#seekBar::-webkit-slider-thumb { width: 0; height: 0; opacity: 0; }
+#seekBar::-moz-range-thumb { width: 0; height: 0; opacity: 0; }
+/* Same treatment for the volume bar's dot — the filled track already
+   shows the level, and it's still click/drag-adjustable via the input's
+   own events regardless of the thumb's visibility. */
+#volumeBar::-webkit-slider-thumb { width: 0; height: 0; opacity: 0; }
+#volumeBar::-moz-range-thumb { width: 0; height: 0; opacity: 0; }

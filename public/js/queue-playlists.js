@@ -11,12 +11,144 @@ let playlistDragSrcIndex = null;
 let playlistDragName = null;
 let expandedPlaylists = new Set();
 
+// A playlist is considered "playing" when the queue's tracks (in order)
+// exactly match the playlist's tracks — no separate flag to keep in sync:
+// any queue edit (add/remove/reorder/shuffle/clear) naturally falls out of
+// this comparison on its own, which is exactly the "until queue is
+// modified" behavior wanted here.
+function isPlaylistPlaying(tracks) {
+  if (queue.length !== tracks.length) return false;
+  for (let i = 0; i < tracks.length; i++) {
+    if (queue[i].path !== tracks[i]) return false;
+  }
+  return true;
+}
+
+// Builds the art/icon + title/subtitle + duration markup shared by queue and
+// playlist rows (same visual language as the full player's "Up next" preview
+// row — see .fp-upcoming-track in responsive.css). Starts with the filename
+// and a placeholder note icon, then upgrades in place once getMeta()
+// resolves, same pattern as syncFpUpcoming() in layout-init.js.
+function rowMediaHTML(name) {
+  return `
+    <img class="row-art hidden" alt="">
+    <span class="row-art-icon">${MUSIC_NOTE_ICON_SVG}</span>
+    <div class="row-text">
+      <div class="row-title">${name}</div>
+      <div class="row-subtitle"></div>
+    </div>
+  `;
+}
+function upgradeRowMedia(row, path, name) {
+  getMeta(path).then(meta => {
+    if (!row.isConnected) return;
+    const title = row.querySelector('.row-title');
+    const subtitle = row.querySelector('.row-subtitle');
+    const art = row.querySelector('.row-art');
+    const artIcon = row.querySelector('.row-art-icon');
+    if (title) title.textContent = meta.title || name;
+    if (subtitle) subtitle.textContent = [meta.artist, meta.album].filter(Boolean).join(' • ');
+    if (meta.hasArt && art && artIcon) {
+      art.src = `/api/art?path=${encodeURIComponent(path)}`;
+      art.classList.remove('hidden');
+      artIcon.classList.add('hidden');
+    }
+  });
+}
+
+// ---------- Touch reordering ----------
+// HTML5 drag-and-drop (draggable/dragstart/dragover/drop, used above and in
+// buildPlaylistRow) never fires on touch input — mobile browsers don't
+// implement it — so reordering silently did nothing on phones/tablets.
+// This adds a Pointer Events-based equivalent, scoped to touch/pen pointers
+// only (mouse keeps using native HTML5 DnD unchanged) and armed only from
+// the drag-handle, matching the existing "grab the handle" affordance.
+// row.dataset.index is read live (same as the DnD handlers) so it stays
+// correct across reorders without rebuilding listeners.
+// Shared across all touch-reorder instances: a container that just finished
+// a drag gets a timestamp here, and a capturing click listener (registered
+// once per container) swallows any click that arrives within that window.
+// Delegated to the container rather than attached to the dragged row itself
+// because onDrop's re-render (renderPlaylists()/renderQueue() fallback) can
+// throw away and rebuild the row DOM before the resulting click fires, which
+// would let a listener on the old, now-detached row miss it entirely.
+const recentDragEndAt = new WeakMap();
+const DRAG_CLICK_SUPPRESS_MS = 400;
+function armDragClickSuppression(container) {
+  recentDragEndAt.set(container, Date.now());
+  if (container.dataset.dragSuppressWired) return;
+  container.dataset.dragSuppressWired = '1';
+  container.addEventListener('click', (e) => {
+    const endedAt = recentDragEndAt.get(container);
+    if (endedAt && Date.now() - endedAt < DRAG_CLICK_SUPPRESS_MS) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+  }, { capture: true });
+}
+
+function enableTouchReorder(handle, row, getRowSelector, onDrop) {
+  handle.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse') return; // native HTML5 DnD handles this input
+    e.preventDefault();
+    const container = row.parentElement;
+    if (!container) return;
+    const startIndex = Number(row.dataset.index);
+    let currentOverRow = null;
+    let moved = false;
+    row.classList.add('dragging');
+
+    function rowAt(clientY) {
+      const rows = [...container.querySelectorAll(getRowSelector())];
+      return rows.find(r => {
+        const rect = r.getBoundingClientRect();
+        return clientY >= rect.top && clientY <= rect.bottom;
+      }) || null;
+    }
+    function onMove(ev) {
+      moved = true;
+      const overRow = rowAt(ev.clientY);
+      if (currentOverRow && currentOverRow !== overRow) currentOverRow.classList.remove('drag-over');
+      if (overRow && overRow !== row) {
+        overRow.classList.add('drag-over');
+        currentOverRow = overRow;
+      } else {
+        currentOverRow = null;
+      }
+      // Auto-scroll the panel when dragging near its top/bottom edge.
+      const contRect = container.getBoundingClientRect();
+      const edge = 32;
+      if (ev.clientY < contRect.top + edge) container.scrollBy({ top: -12 });
+      else if (ev.clientY > contRect.bottom - edge) container.scrollBy({ top: 12 });
+    }
+    function onUp() {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      row.classList.remove('dragging');
+      if (currentOverRow) currentOverRow.classList.remove('drag-over');
+      const destIndex = currentOverRow ? Number(currentOverRow.dataset.index) : null;
+      // A drag gesture (the pointer actually moved) is never a "select/play
+      // this row" tap, even though the browser still fires a trailing click
+      // afterward — armed before onDrop's re-render runs, so it's in place
+      // regardless of whether the row that receives the click is the
+      // original DOM node or a freshly rebuilt one.
+      if (moved) armDragClickSuppression(container);
+      if (destIndex !== null && destIndex !== startIndex) onDrop(startIndex, destIndex, row);
+    }
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+  });
+}
+
 function buildQueueRow(track, i) {
   const div = document.createElement('div');
   div.className = 'queue-item' + (i === queueIndex ? ' playing' : '');
   div.draggable = true;
   div.dataset.index = i;
-  div.innerHTML = `<span class="drag-handle">⠿</span><span>${track.name}</span><span class="remove-btn">✕</span>`;
+  div.innerHTML = `<span class="drag-handle">⠿</span>${rowMediaHTML(track.name)}<button class="remove-btn" title="Remove">${CLOSE_ICON_SVG}</button>`;
+  upgradeRowMedia(div, track.path, track.name);
   // Handlers read the row's *current* dataset.index rather than capturing `i`
   // in a closure. That way, removing one row from the middle of the queue
   // only requires updating dataset.index on the rows after it (see
@@ -80,6 +212,14 @@ function buildQueueRow(track, i) {
     dragSrcRow = null;
     reorderQueueRow(srcRow, destIndex);
   });
+  enableTouchReorder(div.querySelector('.drag-handle'), div, () => '.queue-item', (srcIndex, destIndex, srcRow) => {
+    const currentTrack = queueIndex >= 0 ? queue[queueIndex] : null;
+    const [moved] = queue.splice(srcIndex, 1);
+    queue.splice(destIndex, 0, moved);
+    if (currentTrack) queueIndex = queue.indexOf(currentTrack);
+    syncOriginalQueueIfUnshuffled();
+    reorderQueueRow(srcRow, destIndex);
+  });
   return div;
 }
 
@@ -120,48 +260,106 @@ function updateQueuePlayingIndicator() {
   queuePanel.querySelectorAll('.queue-item.playing').forEach(el => el.classList.remove('playing'));
   const playingRow = [...queuePanel.querySelectorAll('.queue-item')].find(row => Number(row.dataset.index) === queueIndex);
   if (playingRow) playingRow.classList.add('playing');
+  updatePlaylistPlayingIndicator();
+}
+
+// Moves the '.playing' class to whichever playlist header (if any) has
+// tracks exactly matching the current queue (see isPlaylistPlaying), and
+// (for whichever of those is currently expanded and rendered) to its
+// playing track row too — same idea as updateQueuePlayingIndicator, just
+// for the playlist panel. Doesn't rebuild anything else, so it's cheap
+// enough to call from every queue-changing path without disturbing
+// expanded/collapsed state or in-flight metadata fetches on playlist rows.
+function updatePlaylistPlayingIndicator() {
+  playlistsPanel.querySelectorAll('.playlist-header').forEach(header => {
+    const name = header.querySelector('.playlist-name')?.textContent;
+    const tracks = name != null ? playlists[name] : null;
+    const playing = !!tracks && isPlaylistPlaying(tracks);
+    header.classList.toggle('playing', playing);
+    const tracksDiv = header.nextElementSibling;
+    if (!tracksDiv || !tracksDiv.classList.contains('playlist-tracks')) return;
+    tracksDiv.querySelectorAll('.playlist-item.playing').forEach(el => el.classList.remove('playing'));
+    if (!playing) return;
+    const playingRow = [...tracksDiv.querySelectorAll('.playlist-item')].find(row => Number(row.dataset.index) === queueIndex);
+    if (playingRow) playingRow.classList.add('playing');
+  });
 }
 
 // Scrolls the queue panel to the currently-playing row. If that row hasn't
 // been rendered yet (still behind the pagination sentinel), force-loads
 // chunks up to it first via the loader renderPaginated registered for this
 // container, so the row exists before we try to scroll to it.
-function scrollToPlayingQueueRow() {
+async function scrollToPlayingQueueRow() {
   if (queueIndex < 0) return;
   const loadUntil = paginationLoaders.get(queuePanel);
-  if (loadUntil) loadUntil(queueIndex);
+  if (loadUntil) {
+    // Forcing every chunk up to queueIndex in one go (e.g. right after
+    // un-shuffling a 1000+ track queue, when the playing track can be near
+    // the very end) means every one of those rows' buildQueueRow calls
+    // fires synchronously in the same tick. Without this, each row's
+    // getMeta() would be an uncached /api/meta request of its own — enough
+    // requests at once to blow past the browser's connection-queue limit
+    // (ERR_INSUFFICIENT_RESOURCES), which is what left art broken. Batch-
+    // prefetching first means those per-row calls resolve from cache
+    // instead, so the forced load doesn't touch the network at all.
+    await prefetchMeta(queue.slice(0, queueIndex + 1).map(t => t.path));
+    loadUntil(queueIndex);
+  }
   const playingRow = [...queuePanel.querySelectorAll('.queue-item')].find(row => Number(row.dataset.index) === queueIndex);
   if (playingRow) playingRow.scrollIntoView({ block: 'start', behavior: 'smooth' });
 }
 
-// Appends newly-queued tracks' rows without touching existing ones. Falls
-// back to a full renderQueue() if the queue wasn't fully rendered yet
-// (pagination still in progress) or was empty (no pagination state to
-// append onto), since dataset.index continuity can't be assumed otherwise.
+// Appends newly-queued tracks' rows without touching existing ones, but
+// only when the queue panel isn't mid-pagination — otherwise every newly
+// queued track (e.g. an entire folder added via "Add to queue") would be
+// built and inserted immediately, ignoring settings.maxItemsLoad the same
+// way renderPaginated respects it for everything else. When pagination is
+// still in progress, re-running renderQueue() instead hands the *whole*
+// (now longer) queue back to renderPaginated, which keeps chunking it
+// exactly as it would have for a queue of that size to begin with.
 function appendQueueRows(newTracks) {
   if (newTracks.length === 0) return;
   const alreadyRendered = queuePanel.querySelectorAll('.queue-item').length;
   const stillPaginating = !!queuePanel.querySelector('.pagination-sentinel');
   if (alreadyRendered === 0 || stillPaginating) { renderQueue(); return; }
   const startIndex = queue.length - newTracks.length;
+  const chunkSize = currentChunkSize();
+  // Even with no pagination pending yet, adding a large batch (e.g. a
+  // whole folder) could itself push the queue over the chunk-size
+  // threshold — in which case it needs to start paginating now rather
+  // than dumping every new row in at once, so fall back to a full
+  // renderQueue() (which runs everything through renderPaginated) instead
+  // of hand-building rows here.
+  if (queue.length > chunkSize) { renderQueue(); return; }
   const frag = document.createDocumentFragment();
   newTracks.forEach((track, i) => {
     frag.appendChild(buildQueueRow(track, startIndex + i));
   });
   queuePanel.appendChild(frag);
+  updatePlaylistPlayingIndicator();
 }
 
 function renderQueue() {
   queuePanel.innerHTML = '';
+  updatePlaylistPlayingIndicator();
   if (queue.length === 0) {
-    queuePanel.innerHTML = '<div style="padding:10px;color:#77777d;font-size:13px;">Queue is empty</div>';
+    queuePanel.innerHTML = '<div style="padding:16px 10px;color:#77777d;font-size:13px;text-align:center;">Queue is empty</div>';
     return;
   }
   // Only the first chunk (settings.maxItemsLoad rows, or everything if set to
   // 0/unlimited) renders up front; the rest render as the user scrolls the
   // queue panel (see renderPaginated). Indices are still assigned against the
   // full `queue` array either way, since drag/drop and remove-at-index need
-  // to stay correct regardless of what's rendered.
+  // to stay correct regardless of what's rendered. Metadata for the whole
+  // queue is prefetched in one batch call first (mirrors renderFileList in
+  // filelist.js) so buildQueueRow's per-row getMeta() calls resolve from
+  // cache instead of each firing its own /api/meta request — otherwise a
+  // 1000+ track queue could still fire that many individual requests over
+  // the course of scrolling, and scrollToPlayingQueueRow's forced multi-
+  // chunk load (see below) would fire that many at once synchronously,
+  // which is enough to hit the browser's own connection-queue limit
+  // (ERR_INSUFFICIENT_RESOURCES) and leave art/metadata stuck broken.
+  prefetchMeta(queue.map(t => t.path));
   renderPaginated(queuePanel, queue, buildQueueRow);
 }
 
@@ -191,7 +389,7 @@ function renderPlaylists() {
   playlistsPanel.innerHTML = '';
   const newBtn = document.createElement('button');
   newBtn.className = 'new-playlist-btn';
-  newBtn.textContent = '+ New Playlist';
+  newBtn.innerHTML = `${PLUS_ICON_SVG}<span>New Playlist</span>`;
   newBtn.addEventListener('click', async () => {
     const name = await showModal('New playlist name');
     if (name) {
@@ -208,35 +406,73 @@ function renderPlaylists() {
     .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
     .forEach(([name, tracks]) => {
     const header = document.createElement('div');
-    header.className = 'playlist-header';
+    header.className = 'playlist-header' + (isPlaylistPlaying(tracks) ? ' playing' : '');
     header.innerHTML = `
-      <span class="playlist-name">📃 ${name} (${tracks.length})</span>
-      <button class="playlist-play-btn" title="Play playlist">▶</button>
+      <button class="playlist-icon" title="Show tracks">${PLAYLIST_ICON_SVG}</button>
+      <span class="playlist-name" title="Play playlist">${name}</span>
+      <span class="playlist-count">${tracks.length}</span>
     `;
     const tracksDiv = document.createElement('div');
     tracksDiv.className = 'playlist-tracks';
     tracksDiv.style.display = expandedPlaylists.has(name) ? 'block' : 'none';
 
-    header.addEventListener('click', () => {
-      const nowOpen = tracksDiv.style.display === 'none';
-      tracksDiv.style.display = nowOpen ? 'block' : 'none';
-      if (nowOpen) {
-        expandedPlaylists.add(name);
-        renderPlaylistTracks(name, tracks, tracksDiv);
-      } else {
+    function expand() {
+      if (tracksDiv.style.display === 'block') return;
+      tracksDiv.style.display = 'block';
+      expandedPlaylists.add(name);
+      renderPlaylistTracks(name, tracks, tracksDiv);
+    }
+    function toggleExpanded() {
+      if (tracksDiv.style.display === 'block') {
+        tracksDiv.style.display = 'none';
         expandedPlaylists.delete(name);
+      } else {
+        expand();
       }
+    }
+    // Icon: unfold/collapse only, never plays.
+    header.querySelector('.playlist-icon').addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleExpanded();
     });
 
     function playWholePlaylist() {
+      // Suppresses the mobile "auto-open full player on first playback"
+      // behavior (see the playerBarObserver in layout-init.js) — playing a
+      // playlist from this row should start playback and unfold the track
+      // list in place, not jump to the full-screen player.
+      window.suppressNextAutoExpand = true;
       resetQueue(tracks.map(t => ({ path: t, name: fileNameOf(t) })));
       queueIndex = 0;
       playCurrent();
+      // Mark expanded *before* rendering rather than calling expand() after
+      // — renderPlaylists() below rebuilds the whole playlists panel from
+      // scratch, so a call to this closure's expand() (which only touches
+      // this now-about-to-be-discarded tracksDiv) has nothing left to act
+      // on by the time it'd run. Adding the name here means the rebuild
+      // itself creates the row already open.
+      expandedPlaylists.add(name);
       renderQueue();
+      renderPlaylists();
+      // Safety net: the flag is only consumed if the player bar actually
+      // goes hidden -> visible as a result of this play (see
+      // playerBarObserver). If it was already visible (something else was
+      // already playing), that branch never fires, so clear the flag here
+      // too, or it would incorrectly suppress a later, unrelated auto-expand.
+      setTimeout(() => { window.suppressNextAutoExpand = false; }, 0);
     }
-    header.querySelector('.playlist-play-btn').addEventListener('click', (e) => {
-      e.stopPropagation();
-      playWholePlaylist();
+    // Row (anywhere but the icon): play the playlist and unfold it, but
+    // don't open the full player — that's a separate gesture on the mini
+    // player bar (see layout-init.js), untouched by this handler. If this
+    // playlist is already playing (queue exactly matches its tracks — see
+    // isPlaylistPlaying), there's nothing to (re)start, so the row just
+    // folds/unfolds instead, same as pressing the icon.
+    header.addEventListener('click', () => {
+      if (isPlaylistPlaying(tracks)) {
+        toggleExpanded();
+      } else {
+        playWholePlaylist();
+      }
     });
 
     header.addEventListener('contextmenu', (e) => {
@@ -257,10 +493,12 @@ function renderPlaylists() {
 
 function buildPlaylistRow(name, tracks, track, ti) {
   const item = document.createElement('div');
-  item.className = 'playlist-item';
+  item.className = 'playlist-item' + (isPlaylistPlaying(tracks) && ti === queueIndex ? ' playing' : '');
   item.draggable = true;
   item.dataset.index = ti;
-  item.innerHTML = `<span class="drag-handle">⠿</span><span>${fileNameOf(track)}</span><span class="remove-btn">✕</span>`;
+  const trackName = fileNameOf(track);
+  item.innerHTML = `<span class="drag-handle">⠿</span>${rowMediaHTML(trackName)}<button class="remove-btn" title="Remove">${CLOSE_ICON_SVG}</button>`;
+  upgradeRowMedia(item, track, trackName);
   // Handlers read the row's *current* dataset.index rather than capturing
   // `ti` in a closure, same reasoning as the queue's buildQueueRow - so
   // pagination/removal doesn't require rebuilding every row's listeners.
@@ -308,22 +546,35 @@ function buildPlaylistRow(name, tracks, track, ti) {
       return;
     }
     const fromIdx = playlistDragSrcIndex;
-    const toIdx = ti2;
-    const [moved] = tracks.splice(fromIdx, 1);
-    tracks.splice(toIdx, 0, moved);
     playlistDragSrcIndex = null;
     playlistDragName = null;
-    renderPlaylists();
-    api(`/api/playlists/${encodeURIComponent(name)}/reorder`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from: fromIdx, to: toIdx })
-    }).catch(() => loadPlaylists());
+    reorderPlaylistTrack(name, tracks, fromIdx, ti2);
+  });
+  enableTouchReorder(item.querySelector('.drag-handle'), item, () => '.playlist-item', (srcIndex, destIndex) => {
+    reorderPlaylistTrack(name, tracks, srcIndex, destIndex);
   });
   return item;
 }
 
+// Moves a track within a playlist (both the in-memory `tracks` array and the
+// backend), then re-renders. Shared by the mouse (HTML5 drag/drop) and touch
+// (Pointer Events, see enableTouchReorder) reorder paths.
+function reorderPlaylistTrack(name, tracks, fromIdx, toIdx) {
+  const [moved] = tracks.splice(fromIdx, 1);
+  tracks.splice(toIdx, 0, moved);
+  renderPlaylists();
+  api(`/api/playlists/${encodeURIComponent(name)}/reorder`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from: fromIdx, to: toIdx })
+  }).catch(() => loadPlaylists());
+}
+
 function renderPlaylistTracks(name, tracks, tracksDiv) {
   tracksDiv.innerHTML = '';
+  // Same batch-prefetch as renderQueue() above, and for the same reason:
+  // without it, a large playlist's rows would each fire their own
+  // /api/meta request as they render.
+  prefetchMeta(tracks);
   renderPaginated(tracksDiv, tracks, (track, ti) => buildPlaylistRow(name, tracks, track, ti));
 }
 

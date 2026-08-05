@@ -80,11 +80,54 @@
      number, so a future height change only needs to happen here. */
   :root { --bottom-nav-h: 44px; }
 
-  /* Scrollbars are a mouse-era affordance — on a touchscreen they're just
-     visual clutter next to native momentum scrolling, so hide every one
-     of them here in one place rather than the ad-hoc per-element rules
-     this previously relied on (several of which didn't cover every
-     scrollable element, e.g. the album strip in artist view). */
+  /* A fully hidden scrollbar (previously the case here) made long lists
+     (queue, playlists, file list) hard to track while scrolling on touch,
+     but a permanently-visible one is exactly what was asked to be removed
+     in the first place — so mobile reuses the same show-while-scrolling,
+     hide-after-a-pause .scrollbar-active mechanism desktop already has
+     (see setupHoverScrollbars in filelist.js, now also attached to
+     .player-blur-group for the full player), instead of relying on each
+     browser's own native scrollbar fade timing (inconsistent, and on some
+     mobile browsers doesn't fade at all). Thin here where filelist.css's
+     own .scrollbar-active rule is thicker, to stay proportionate at
+     mobile's touch scale; same neutral gray thumb color otherwise. */
+  .file-list, .tab-panel, .album-strip, .upload-list, .player-blur-group {
+    scrollbar-width: none;
+    scrollbar-color: transparent transparent;
+  }
+  .file-list::-webkit-scrollbar, .tab-panel::-webkit-scrollbar,
+  .album-strip::-webkit-scrollbar, .upload-list::-webkit-scrollbar,
+  .player-blur-group::-webkit-scrollbar {
+    display: block; width: 3px; height: 3px;
+  }
+  .file-list::-webkit-scrollbar-track, .tab-panel::-webkit-scrollbar-track,
+  .album-strip::-webkit-scrollbar-track, .upload-list::-webkit-scrollbar-track,
+  .player-blur-group::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .file-list::-webkit-scrollbar-thumb, .tab-panel::-webkit-scrollbar-thumb,
+  .album-strip::-webkit-scrollbar-thumb, .upload-list::-webkit-scrollbar-thumb,
+  .player-blur-group::-webkit-scrollbar-thumb {
+    background: transparent; border-radius: 3px;
+  }
+  .file-list.scrollbar-active, .tab-panel.scrollbar-active,
+  .album-strip.scrollbar-active, .upload-list.scrollbar-active,
+  .player-blur-group.scrollbar-active {
+    scrollbar-color: #35353a transparent;
+  }
+  .file-list.scrollbar-active::-webkit-scrollbar-thumb,
+  .tab-panel.scrollbar-active::-webkit-scrollbar-thumb,
+  .album-strip.scrollbar-active::-webkit-scrollbar-thumb,
+  .upload-list.scrollbar-active::-webkit-scrollbar-thumb,
+  .player-blur-group.scrollbar-active::-webkit-scrollbar-thumb {
+    background: #35353a;
+  }
+
+  /* Every other scrollable element (anything not covered by the JS-driven
+     show/hide above) stays fully hidden, same as before — only the
+     surfaces someone actually scrolls through at length on mobile
+     (file list, queue/playlists, album strip, uploads, full player) get a
+     visible scrollbar at all. */
   * {
     scrollbar-width: none;
     -ms-overflow-style: none;
@@ -454,6 +497,14 @@
     font-size: 11px;
     color: #a8a8ae;
     overflow: hidden;
+  }
+  /* Artist and album each get their own ellipsis-truncated line (see
+     .pb-link-line in player.css) instead of the marquee scrolling — these
+     two were removed from MARQUEE_TARGETS in layout-init.js since the
+     marquee model is built for a single scrolling line, not a stacked
+     pair. */
+  .mini-player-subtitle .pb-link-line {
+    overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -506,7 +557,7 @@
      subsets of them in row divs would change desktop's own layout). */
   #playerBar.player-bar.expanded .full-player {
     display: grid;
-    grid-template-rows: 1fr auto auto auto auto auto auto;
+    grid-template-rows: 1fr auto auto auto auto auto auto auto;
     row-gap: 14px;
     width: 100%;
     min-width: 0;
@@ -567,10 +618,10 @@
   /* Backward circle sits to the left of center (revealed as art slides
      right); forward circle sits to the right (revealed as art slides
      left). Their own position stays fixed — only opacity/scale animate. */
-  .fp-art-seek-back { left: calc(50% - 150px); }
-  .fp-art-seek-forward { right: calc(50% - 150px); }
+  .fp-art-seek-back { left: calc(50% - 175px); }
+  .fp-art-seek-forward { right: calc(50% - 175px); }
 
-  .fp-art, .fp-art-icon { width: 220px; height: 220px; border-radius: 12px; flex-shrink: 0; }
+  .fp-art, .fp-art-icon { width: 270px; height: 270px; border-radius: 12px; flex-shrink: 0; }
   .fp-art { object-fit: cover; background: #2a2a2e; }
   .fp-art.hidden { display: none; }
   .fp-art-icon {
@@ -591,13 +642,11 @@
     flex-direction: column;
     width: 100%;
     max-width: 320px;
-    height: 220px;
+    height: 270px;
     overflow-y: auto;
-    scrollbar-width: none;
     text-align: center;
     padding: 0 8px;
   }
-  .mobile-lyrics-view::-webkit-scrollbar { display: none; }
   #mobileLyricsEmpty { flex: 1; display: flex; align-items: center; justify-content: center; color: #c8c8ce; font-size: 13px; }
   #mobileLyricsEmpty.hidden { display: none; }
   #mobileLyricsLines .lyrics-line { font-size: 14px; line-height: 1.9; color: #c8c8ce; }
@@ -622,6 +671,12 @@
     width: 100%;
     min-width: 0;
     overflow: hidden;
+  }
+  /* Same reasoning as .mini-player-subtitle in this file: artist/album
+     stack as two ellipsis-truncated lines instead of marqueeing, since
+     .fp-subtitle was removed from MARQUEE_TARGETS in layout-init.js. */
+  .fp-subtitle .pb-link-line {
+    overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -640,8 +695,22 @@
   #fpSeekBar::-webkit-slider-thumb { background: var(--accent-color); }
   #fpSeekBar::-moz-range-progress { background: var(--accent-color); }
   #fpSeekBar::-moz-range-thumb { background: var(--accent-color); }
+  /* Same as #seekBar in player.css: no visible dot on the seek bar's
+     thumb, only on the volume bar's. */
+  #fpSeekBar::-webkit-slider-thumb { width: 0; height: 0; opacity: 0; }
+  #fpSeekBar::-moz-range-thumb { width: 0; height: 0; opacity: 0; }
 
   .fp-row-timers { justify-content: space-between; padding: 0 4px; font-size: 12px; color: #a8a8ae; font-variant-numeric: tabular-nums; }
+
+  /* Primary transport (prev/play/pause/next) gets its own row, sized up
+     as the clear focal point — everything else (folder/speed/shuffle/
+     lyrics/loop/delete/options) moved to .fp-row-icons below, and volume
+     is its own row underneath that. */
+  .fp-row-transport { gap: 20px; }
+  .fp-row-transport .fp-icon-btn { width: 52px; height: 52px; font-size: 22px; }
+  .fp-row-transport .fp-icon-btn svg { width: 24px; height: 24px; }
+  .fp-row-transport .fp-play-btn { width: 64px; height: 64px; }
+  .fp-row-transport .fp-play-btn svg { width: 28px; height: 28px; }
 
   .fp-row-icons { gap: 4px; }
   .fp-icon-btn {
@@ -653,16 +722,18 @@
     border: none;
     border-radius: 4px;
     color: #e8e8ea;
-    width: 40px;
-    height: 40px;
-    font-size: 20px;
+    width: 36px;
+    height: 36px;
+    font-size: 18px;
     padding: 0;
     cursor: pointer;
     position: relative;
   }
-  /* Matches desktop's .player-controls button.active-state exactly (see
-     player.css) — solid accent-color fill, dark icon/text. */
-  .fp-icon-btn.active-state { background: var(--accent-color); color: #12121e; }
+  /* Shuffle/loop signal "on" by tinting the icon itself in the accent
+     color, not by filling a background square behind it (that square
+     read as a generic highlight rather than specifically "this is
+     enabled", and visually competed with the play button). */
+  .fp-icon-btn.active-state { background: none; color: var(--accent-color); }
   #fpSpeedBtn { border-radius: 50%; font-size: 13px; }
   #fpPlayPauseBtn .icon-play.hidden,
   #fpPlayPauseBtn .icon-pause.hidden { display: none; }
@@ -676,6 +747,7 @@
   #fpLoopBtn .loop-label { position: relative; z-index: 1; font-size: 9px; margin-left: 0; }
 
   .fp-row-volume { gap: 6px; padding: 0 4px; }
+  .fp-volume-icon { flex-shrink: 0; color: #a8a8ae; }
   #fpVolumeBar {
     flex: 1;
     min-width: 0;
@@ -686,20 +758,8 @@
   #fpVolumeBar::-webkit-slider-thumb { background: var(--accent-color); }
   #fpVolumeBar::-moz-range-progress { background: var(--accent-color); }
   #fpVolumeBar::-moz-range-thumb { background: var(--accent-color); }
-  .fp-small-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-    background: none;
-    border: none;
-    border-radius: 4px;
-    color: #e8e8ea;
-    width: 36px;
-    height: 36px;
-    padding: 0;
-    cursor: pointer;
-  }
+  #fpVolumeBar::-webkit-slider-thumb { width: 0; height: 0; opacity: 0; }
+  #fpVolumeBar::-moz-range-thumb { width: 0; height: 0; opacity: 0; }
 
   /* ----- Upcoming track row -----
      Same visual language as .mini-player (art/icon + title/subtitle sizes,
@@ -715,7 +775,15 @@
     text-transform: uppercase;
     color: #8a8a90;
   }
-  .fp-upcoming-track { display: flex; align-items: center; gap: 10px; }
+  .fp-upcoming-track {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: #202024;
+    border-radius: 10px;
+    padding: 8px;
+    cursor: pointer;
+  }
   .fp-upcoming-art, .fp-upcoming-art-icon {
     width: 40px;
     height: 40px;
@@ -745,6 +813,13 @@
   .fp-upcoming-subtitle {
     font-size: 11px;
     color: #a8a8ae;
+    overflow: hidden;
+  }
+  /* Artist/album stack as two ellipsis-truncated lines instead of
+     marqueeing (same reasoning as .mini-player-subtitle/.fp-subtitle in
+     this file) — .fp-upcoming-subtitle was removed from MARQUEE_TARGETS
+     in layout-init.js. */
+  .fp-upcoming-subtitle .pb-link-line {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
