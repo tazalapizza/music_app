@@ -84,30 +84,101 @@ function handleRowClick(e, item, defaultAction) {
   if (defaultAction) defaultAction();
 }
 
+// Tracks in-flight /api/meta requests by path so concurrent callers asking
+// for the same not-yet-cached path (e.g. playCurrent() fetching it for the
+// player bar and renderQueue() fetching it for the matching queue row,
+// moments apart) share one request instead of each firing their own - the
+// metaCache check alone only catches this once a request has already
+// resolved, not while it's still pending.
+const pendingMetaFetches = new Map(); // path -> Promise
+
 async function getMeta(path) {
   if (metaCache[path]) return metaCache[path];
-  try {
-    const data = await api(`/api/meta?path=${encodeURIComponent(path)}`);
-    metaCache[path] = data;
-    return data;
-  } catch {
-    return { title: fileNameOf(path), artist: '', duration: null, hasArt: false };
-  }
+  const pending = pendingMetaFetches.get(path);
+  if (pending) return pending;
+  const promise = (async () => {
+    try {
+      const data = await api(`/api/meta?path=${encodeURIComponent(path)}`);
+      metaCache[path] = data;
+      return data;
+    } catch {
+      return { title: fileNameOf(path), artist: '', duration: null, hasArt: false };
+    } finally {
+      pendingMetaFetches.delete(path);
+    }
+  })();
+  pendingMetaFetches.set(path, promise);
+  return promise;
 }
 
-// Fetches metadata for many paths in one request instead of one request per
-// track. Populates metaCache so subsequent getMeta() calls for these paths
-// (e.g. from buildFileRow) resolve instantly from cache.
+// The server's own /api/meta/batch limit (META_BATCH_LIMIT in server.js) is
+// currently 100 - this only needs to stay at or below that so a chunk never
+// gets silently truncated server-side (see that constant's comment for what
+// happens if it does). It's set lower here, not matched exactly, so each
+// individual request/response and its concurrent parse work on the server
+// stays small - large mixed page sizes (500/100) were part of what made a
+// big folder's worth of metadata requests turn into a heavy simultaneous
+// parsing burst; smaller chunks spread that out.
+const META_BATCH_CHUNK_SIZE = 20;
+// With chunks this small, a large folder/queue can now split into dozens of
+// requests (e.g. 1000 tracks -> 50 chunks) - the server-side concurrency
+// limiter (withMetaParseSlot in server.js) caps how much parsing work runs
+// at once regardless, but there's still no reason for one tab to open
+// dozens of simultaneous connections for a single prefetch call.
+const META_BATCH_CONCURRENCY = 6;
+
+// Fetches metadata for many paths in one or more requests instead of one
+// request per track. Populates metaCache so subsequent getMeta() calls for
+// these paths (e.g. from buildFileRow) resolve instantly from cache.
 async function prefetchMeta(paths) {
-  const missing = [...new Set(paths)].filter(p => !metaCache[p]);
+  const missing = [...new Set(paths)].filter(p => !metaCache[p] && !pendingMetaFetches.has(p));
   if (missing.length === 0) return;
-  try {
-    const { meta } = await api('/api/meta/batch', { method: 'POST', body: JSON.stringify({ paths: missing }), headers: { 'Content-Type': 'application/json' } });
-    for (const p of missing) {
-      if (meta[p]) metaCache[p] = meta[p];
-    }
-  } catch {
-    // Fall through silently - individual getMeta() calls in buildFileRow will
-    // still fetch (and cache) whatever this batch call failed to retrieve.
+
+  const chunks = [];
+  for (let i = 0; i < missing.length; i += META_BATCH_CHUNK_SIZE) {
+    chunks.push(missing.slice(i, i + META_BATCH_CHUNK_SIZE));
   }
+
+  async function runChunk(chunk) {
+    // Registered in pendingMetaFetches (same map getMeta() checks) before
+    // the request goes out, so a getMeta() call for a path that's already
+    // part of this in-flight batch attaches to it instead of firing its own
+    // separate /api/meta request for a path that's seconds away from
+    // showing up in metaCache anyway.
+    const chunkPromise = (async () => {
+      try {
+        const { meta } = await api('/api/meta/batch', { method: 'POST', body: JSON.stringify({ paths: chunk }), headers: { 'Content-Type': 'application/json' } });
+        for (const p of chunk) {
+          if (meta[p]) metaCache[p] = meta[p];
+        }
+        // getMeta() expects its own return value to be this path's data
+        // specifically (or the fallback shape on failure) - resolve each
+        // path's shared promise to that, not to the whole batch response.
+        return chunk.reduce((acc, p) => {
+          acc[p] = meta[p] || { title: fileNameOf(p), artist: '', duration: null, hasArt: false };
+          return acc;
+        }, {});
+      } catch {
+        // Fall through silently for this chunk - individual getMeta() calls
+        // (including ones already attached to this promise) fall back to
+        // their own per-path placeholder below.
+        return chunk.reduce((acc, p) => {
+          acc[p] = { title: fileNameOf(p), artist: '', duration: null, hasArt: false };
+          return acc;
+        }, {});
+      } finally {
+        for (const p of chunk) pendingMetaFetches.delete(p);
+      }
+    })();
+    for (const p of chunk) pendingMetaFetches.set(p, chunkPromise.then(byPath => byPath[p]));
+    await chunkPromise;
+  }
+
+  let next = 0;
+  async function worker() {
+    while (next < chunks.length) {
+      await runChunk(chunks[next++]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(META_BATCH_CONCURRENCY, chunks.length) }, worker));
 }

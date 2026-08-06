@@ -78,7 +78,7 @@ const DEFAULT_SETTINGS = {
   rememberVolume: false,
   hideNonMusic: false,
   replayGainEnabled: true,
-  maxItemsLoad: 100 // rows loaded per chunk in file lists/queue/playlists; 0 = unlimited (load everything at once)
+  maxItemsLoad: 20 // rows loaded per chunk in file lists/queue/playlists; 0 = unlimited (load everything at once)
 };
 let settings = { ...DEFAULT_SETTINGS };
 function loadSettings() {

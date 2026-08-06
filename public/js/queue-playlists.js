@@ -49,7 +49,13 @@ function upgradeRowMedia(row, path, name) {
     if (title) title.textContent = meta.title || name;
     if (subtitle) subtitle.textContent = [meta.artist, meta.album].filter(Boolean).join(' • ');
     if (meta.hasArt && art && artIcon) {
-      art.src = `/api/art?path=${encodeURIComponent(path)}`;
+      // Route through the hash-deduped endpoint (same one filelist.js uses)
+      // so tracks sharing embedded art - the common case within one album/
+      // folder - let the browser fetch/decode/cache that image once instead
+      // of once per row.
+      art.src = meta.artHash
+        ? `/api/art-by-hash?hash=${encodeURIComponent(meta.artHash)}&fallback=${encodeURIComponent(path)}`
+        : `/api/art?path=${encodeURIComponent(path)}`;
       art.classList.remove('hidden');
       artIcon.classList.add('hidden');
     }
@@ -346,12 +352,7 @@ function renderQueue() {
     queuePanel.innerHTML = '<div style="padding:16px 10px;color:#77777d;font-size:13px;text-align:center;">Queue is empty</div>';
     return;
   }
-  // Only the first chunk (settings.maxItemsLoad rows, or everything if set to
-  // 0/unlimited) renders up front; the rest render as the user scrolls the
-  // queue panel (see renderPaginated). Indices are still assigned against the
-  // full `queue` array either way, since drag/drop and remove-at-index need
-  // to stay correct regardless of what's rendered. Metadata for the whole
-  // queue is prefetched in one batch call first (mirrors renderFileList in
+  // Metadata is prefetched in batch calls (mirrors renderFileList in
   // filelist.js) so buildQueueRow's per-row getMeta() calls resolve from
   // cache instead of each firing its own /api/meta request — otherwise a
   // 1000+ track queue could still fire that many individual requests over
@@ -359,8 +360,51 @@ function renderQueue() {
   // chunk load (see below) would fire that many at once synchronously,
   // which is enough to hit the browser's own connection-queue limit
   // (ERR_INSUFFICIENT_RESOURCES) and leave art/metadata stuck broken.
-  prefetchMeta(queue.map(t => t.path));
+  //
+  // renderPaginated() runs synchronously and immediately, using whatever's
+  // already cached (placeholder icon + filename otherwise, same fallback as
+  // always) - it must never be gated behind a network round trip.
+  // renderQueue() can be called again in quick succession (e.g.
+  // fillFolderQueueInBackground() replacing a single-track queue with the
+  // full folder moments after the first render), and if row-building were
+  // deferred behind a .then(), an in-flight older call's rows/closures
+  // could land after `queue` has already been replaced - stale
+  // dataset.index, art/metadata that never resolves, and clicks that
+  // reference a row for a queue that no longer exists. Rows upgrade in
+  // place as prefetchMeta resolves, via upgradeRowMedia's own getMeta()
+  // call.
+  //
+  // Prefetch order: now-playing track first, then the rest of the first
+  // (visible) chunk, then everything else in the background - each stage
+  // awaited before the next starts, so the row the user's actual attention
+  // is on always upgrades first, followed by the rest of what's on screen,
+  // before spending any requests on rows below the fold.
+  // The currently-playing track's metadata is already being fetched by
+  // playCurrent() in playback.js (it calls getMeta() directly, for the
+  // player bar) - firing another fetch for the same path here via
+  // prefetchMeta would just race it, since both start around the same time
+  // and neither's in metaCache yet for the other to dedupe against. Instead
+  // of fetching it again, just wait on playCurrent()'s own getMeta() call
+  // for it (via the shared metaCache - getMeta() resolves from cache
+  // immediately once playCurrent()'s fetch lands) before moving on to the
+  // rest of the first chunk, so the now-playing row still gets upgrade
+  // priority without a duplicate request.
+  const nowPlayingPath = queue[queueIndex] ? queue[queueIndex].path : null;
+  const firstChunkPaths = queue.slice(0, currentChunkSize()).map(t => t.path)
+    .filter(p => p !== nowPlayingPath);
+  const restPaths = queue.slice(currentChunkSize()).map(t => t.path)
+    .filter(p => p !== nowPlayingPath);
   renderPaginated(queuePanel, queue, buildQueueRow);
+  const nowPlayingReady = nowPlayingPath ? getMeta(nowPlayingPath) : Promise.resolve();
+  nowPlayingReady.then(() => prefetchMeta(firstChunkPaths)).then(() => {
+    // Backfill the rest of the queue in the background so scrolling
+    // further, or a forced jump via scrollToPlayingQueueRow, resolves from
+    // cache instead of firing its own request per row. Only the remainder
+    // is sent here - the first chunk was already just requested above, and
+    // prefetchMeta's own cache check would just re-skip it anyway, but
+    // there's no reason to even build/send that duplicate request.
+    prefetchMeta(restPaths);
+  });
 }
 
 async function addToQueue(item) {
@@ -721,6 +765,16 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     document.getElementById('queuePanel').classList.toggle('hidden', !isQueue);
     document.getElementById('queueToolbar').style.display = isQueue ? 'flex' : 'none';
     document.getElementById('playlistsPanel').classList.toggle('hidden', btn.dataset.tab !== 'playlists');
+    // Whichever panel was just hidden had a clientWidth of 0 the entire
+    // time (see scanMarquees/measureMarquee in layout-init.js) - anything
+    // inside it that overflows was measured as "not overflowing" while
+    // hidden, and nothing re-measures it once it becomes visible without
+    // this: the debounced MutationObserver-driven rescan only fires on
+    // content changes, not visibility/class changes like this toggle.
+    // Affects queue/playlist row names directly, and - via
+    // setMobileTab()'s reuse of this same click handler on mobile - the
+    // library/playlist views' own marquee targets too.
+    scanMarquees();
   });
 });
 

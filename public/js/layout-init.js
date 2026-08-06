@@ -37,16 +37,14 @@ if (window.navigator.standalone || window.matchMedia('(display-mode: standalone)
 }
 
 // ---------- Generic overflow marquee (site-wide) ----------
-// Reusable equivalent of the player bar's hand-built, two-span-synced
-// marquee (see startMarquee/MARQUEE_* in playback.js — that one is a
-// different, correlated case: title+path always scroll together, so it's
-// kept separate rather than forced through this generic single-element
-// path). This covers every other truncated text spot in the app: file
-// list rows, library/album names, queue/playlist items, upload names,
-// the metadata-editor dropdown, and the full-player/mini-player/upcoming-
-// track rows.
+// Reusable equivalent of the player bar's hand-built startMarquee()
+// (playback.js) — that one exists for its own two elements (title, and the
+// single-line file-path fallback when there's no artist/album); this one
+// covers every other truncated text spot in the app, including the
+// player's artist/album lines, which each get their own independent entry
+// here so they scroll separately rather than as one glued block.
 //
-// Targets are given as [selector, { wrapWhole }] pairs:
+// Targets are given as [selector, wrapWhole] pairs:
 //   wrapWhole: true  → the selector's own text becomes the scrolling span
 //                       (wrapped in one automatically if it's plain text).
 //   wrapWhole: false → the selector already contains exactly the element
@@ -60,11 +58,14 @@ const MARQUEE_TARGETS = [
   ['.file-title .cell-text, .file-artist .cell-text, .file-album .cell-text', false],
   ['.meta-field-dropdown-item', true],
   ['.upload-item-name', true],
-  ['.queue-item > span:nth-child(2), .playlist-item > span:nth-child(2)', true],
+  ['.queue-item .row-title, .playlist-item .row-title, .queue-item .row-subtitle, .playlist-item .row-subtitle', true],
   ['.playlist-name', true],
   ['.mini-player-title', true],
   ['.fp-title', true],
   ['.fp-upcoming-title', true],
+  // Artist/album line pairs, each line its own independent target - see
+  // .pb-link-line in player.css for why they must not share one target.
+  ['.mini-player-subtitle .pb-link-line, .fp-subtitle .pb-link-line, .fp-upcoming-subtitle .pb-link-line, #trackPath .pb-link-line', true],
 ];
 
 function ensureMarqueeSpan(el, wrapWhole) {
@@ -110,6 +111,9 @@ function measureMarquee(container, span) {
   if (overflow > 4) {
     // Small gap so the text fully clears the box before looping back.
     overflowingMarquees.set(container, { span, distance: overflow + 24 });
+    // No CSS rule reads this - it's a devtools-inspection marker only, for
+    // checking whether a given element was actually measured as
+    // overflowing (vs. currently animating, which is .marquee-active).
     container.classList.add('marquee-overflowing');
   } else {
     overflowingMarquees.delete(container);
@@ -139,84 +143,124 @@ function scanMarquees(root = document) {
 const MARQUEE_SPEED_PX_S = 40;   // matches the player bar's own MARQUEE_SPEED, for a consistent feel
 const MARQUEE_START_HOLD = 800;  // ms every element sits at its start position before the group moves
 const MARQUEE_END_HOLD = 800;    // ms every element sits at its finished position once the slowest one arrives
-let marqueeClockRAF = null;
-let marqueeClockStart = null;
-let currentlyActiveSpans = new Set();
+
+// #trackPath .pb-link-line (desktop artist/album lines) scrolls
+// continuously even on a hover-capable device, matching the player bar's
+// title (startMarquee() in playback.js, which has no hover gating) instead
+// of the hover-to-read default used for every other target below.
+const ALWAYS_SCROLL_SELECTOR = '#trackPath .pb-link-line';
 
 function activeMarqueeEntries() {
   // On desktop (hover-capable), only elements currently under the pointer
   // scroll — matches the "static ellipsis at rest, hover to read" intent.
   // On touch, there's no hover concept, so everything overflowing and
-  // actually rendered participates automatically.
+  // actually rendered participates automatically. ALWAYS_SCROLL_SELECTOR
+  // is exempt from the hover requirement either way.
   const isHoverCapable = window.matchMedia('(hover: hover)').matches;
   const entries = [];
   overflowingMarquees.forEach(({ span, distance }, container) => {
     if (container.getClientRects().length === 0) return; // detached or display:none somewhere up the tree
-    if (isHoverCapable && !container.matches(':hover')) return;
+    if (isHoverCapable && !container.matches(':hover') && !container.matches(ALWAYS_SCROLL_SELECTOR)) return;
     entries.push({ container, span, distance });
   });
   return entries;
 }
 
+// Roots that run their own independent clock instead of the shared
+// page-wide one - e.g. the full player shouldn't sit waiting on some
+// unrelated file name elsewhere on the page just because both happened to
+// be active at once; #fullPlayer is a self-contained overlay. Add more
+// roots here for other isolated panels that need the same treatment.
+const ISOLATED_MARQUEE_ROOTS = [
+  document.getElementById('fullPlayer'),
+].filter(Boolean);
+
+// Map<Element|null, entry[]> - key is the matched isolated root, or null
+// for the shared group. Each key gets its own independent cycle timing.
+function partitionEntriesByRoot(entries) {
+  const groups = new Map([[null, []], ...ISOLATED_MARQUEE_ROOTS.map(r => [r, []])]);
+  for (const entry of entries) {
+    const root = ISOLATED_MARQUEE_ROOTS.find(r => r.contains(entry.container)) || null;
+    groups.get(root).push(entry);
+  }
+  return groups;
+}
+
+// Toggles `className` on whatever's currently active, diffed against last
+// frame's set - only touches elements whose membership actually changed,
+// not every element every frame. onLeave lets a caller do extra cleanup
+// (e.g. resetting a transform) for elements that just became inactive.
+function diffActiveSet(previous, current, className, onLeave) {
+  previous.forEach(el => {
+    if (!current.has(el)) {
+      el.classList.remove(className);
+      if (onLeave) onLeave(el);
+    }
+  });
+  current.forEach(el => { if (!previous.has(el)) el.classList.add(className); });
+  return current;
+}
+
+let currentlyActiveSpans = new Set();
+// Tracked separately from currentlyActiveSpans because the two live on
+// different elements: wrapWhole:true targets need .marquee-active on the
+// CONTAINER (its static text-overflow:ellipsis lives there - see
+// .marquee-generic.marquee-active in base.css) as well as the span,
+// while wrapWhole:false only ever needs it on the span (see
+// .marquee-generic-inline > .marquee-active in the same file).
+let currentlyActiveContainers = new Set();
+
+// Per-group cycle-start timestamp, keyed the same way partitionEntriesByRoot
+// groups entries - each group needs its own independent "when did this
+// group's current cycle begin".
+const marqueeGroupStarts = new Map();
+
 function runMarqueeClock(ts) {
   const entries = activeMarqueeEntries();
 
-  // .marquee-active neutralizes a span's own overflow:hidden/ellipsis (see
-  // base.css) for exactly the elements currently participating — needed
-  // for the wrapWhole:false case (e.g. .cell-text), which clips and
-  // ellipsizes its own content independently of any transform applied to
-  // it. Only toggled on actual set changes, not every frame. Any span
-  // leaving the active set (mouse moved away, element scrolled out of
-  // view, etc.) is snapped back to its start position immediately rather
-  // than left wherever it was mid-scroll — leaving a stale transform in
-  // place would show visibly shifted/clipped text once .marquee-active is
-  // removed and the element's own ellipsis clipping takes back over.
-  const nextActive = new Set(entries.map(e => e.span));
-  currentlyActiveSpans.forEach(span => {
-    if (!nextActive.has(span)) {
-      span.classList.remove('marquee-active');
-      span.style.transform = '';
+  currentlyActiveSpans = diffActiveSet(
+    currentlyActiveSpans, new Set(entries.map(e => e.span)), 'marquee-active',
+    span => { span.style.transform = ''; }
+  );
+  currentlyActiveContainers = diffActiveSet(
+    currentlyActiveContainers, new Set(entries.map(e => e.container)), 'marquee-active'
+  );
+
+  // Each group (see ISOLATED_MARQUEE_ROOTS/partitionEntriesByRoot above)
+  // runs its own "wait for the slowest one" cycle: every element in a
+  // group moves at the same speed, so the longest distance in that group
+  // sets how long the moving phase lasts - shorter elements arrive early
+  // and hold at their own finished position until the group's slowest one
+  // catches up, then the whole group loops together. A group with nothing
+  // active this frame just clears its own start timestamp.
+  const groups = partitionEntriesByRoot(entries);
+  groups.forEach((groupEntries, groupKey) => {
+    if (groupEntries.length === 0) {
+      marqueeGroupStarts.delete(groupKey);
+      return;
     }
-  });
-  nextActive.forEach(span => { if (!currentlyActiveSpans.has(span)) span.classList.add('marquee-active'); });
-  currentlyActiveSpans = nextActive;
+    if (!marqueeGroupStarts.has(groupKey)) marqueeGroupStarts.set(groupKey, ts);
+    const maxDistance = Math.max(...groupEntries.map(e => e.distance));
+    const scrollDuration = (maxDistance / MARQUEE_SPEED_PX_S) * 1000;
+    const cycle = MARQUEE_START_HOLD + scrollDuration + MARQUEE_END_HOLD;
+    const t = (ts - marqueeGroupStarts.get(groupKey)) % cycle;
 
-  if (entries.length === 0) {
-    marqueeClockStart = null;
-    marqueeClockRAF = requestAnimationFrame(runMarqueeClock);
-    return;
-  }
-  if (marqueeClockStart === null) marqueeClockStart = ts;
-
-  // One shared cycle: every element scrolls at the same px/s speed, so the
-  // element with the longest distance to travel defines how long the
-  // "moving" phase lasts — shorter elements simply arrive early and sit at
-  // their own finished position (translateX(-distance)) until the slowest
-  // one catches up, which is what keeps the whole group visually
-  // finishing together rather than each snapping back independently.
-  const maxDistance = Math.max(...entries.map(e => e.distance));
-  const scrollDuration = (maxDistance / MARQUEE_SPEED_PX_S) * 1000;
-  const cycle = MARQUEE_START_HOLD + scrollDuration + MARQUEE_END_HOLD;
-  const t = (ts - marqueeClockStart) % cycle;
-
-  entries.forEach(({ container, span, distance }) => {
-    let x;
-    if (t < MARQUEE_START_HOLD) {
-      x = 0;
-    } else {
-      // Every element moves at the same speed; clamped to its own distance
-      // so a short element simply arrives early and holds at its finished
-      // position (rather than overshooting) while the group's shared
-      // `cycle` keeps waiting on the slowest element to finish too.
-      const elapsedMove = Math.min(t - MARQUEE_START_HOLD, scrollDuration);
-      x = -Math.min(distance, (elapsedMove / 1000) * MARQUEE_SPEED_PX_S);
-    }
-    span.style.transform = `translateX(${x}px)`;
+    groupEntries.forEach(({ span, distance }) => {
+      let x = 0;
+      if (t >= MARQUEE_START_HOLD) {
+        // Clamped to this element's own distance so a short element
+        // simply arrives early and holds (rather than overshooting)
+        // while the group's shared cycle waits on the slowest one.
+        const elapsedMove = Math.min(t - MARQUEE_START_HOLD, scrollDuration);
+        x = -Math.min(distance, (elapsedMove / 1000) * MARQUEE_SPEED_PX_S);
+      }
+      span.style.transform = `translateX(${x}px)`;
+    });
   });
 
   marqueeClockRAF = requestAnimationFrame(runMarqueeClock);
 }
-marqueeClockRAF = requestAnimationFrame(runMarqueeClock);
+let marqueeClockRAF = requestAnimationFrame(runMarqueeClock);
 
 // Elements gain/lose ':hover' outside of any DOM mutation, so the clock
 // can't rely solely on the MutationObserver below to know when to start/
@@ -432,6 +476,21 @@ function setMobileTab(tab) {
     const sidebarTabBtn = document.querySelector(`.tab-btn[data-tab="${tab}"]`);
     if (sidebarTabBtn && !sidebarTabBtn.classList.contains('active')) sidebarTabBtn.click();
   }
+  // Whatever's inside this tab's panel may have been built/updated while it
+  // was hidden (display:none on an ancestor, e.g. via the mobile-tab-*
+  // class swap above, or the desktop sidebar tab equivalent this reuses) -
+  // a hidden element's scrollWidth/clientWidth both read as 0, so
+  // measureMarquee() (see scanMarquees) computed "not overflowing" for
+  // everything in it regardless of actual content length, and nothing else
+  // re-measures it once it becomes visible: the debounced MutationObserver
+  // rescan only fires on content changes, not visibility changes, and
+  // there was no tab-switch-specific rescan at all. Re-scanning here, now
+  // that the panel is actually visible and has real layout, is what
+  // catches every marquee target inside it that measured wrong the first
+  // time - .lib-name, .album-card-name, .playlist-name,
+  // .upload-item-name, .meta-field-dropdown-item, and the queue/playlist
+  // row names were all affected by this, not just one specific panel.
+  scanMarquees();
 }
 bottomNav.querySelectorAll('.bottom-nav-btn').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -512,6 +571,18 @@ function togglePlayerExpanded(force) {
   // active). Re-scanning right on expand catches it now that it's
   // actually visible and measurable.
   if (willExpand) scanMarquees();
+  // No redraw of the blur mosaic canvas here on purpose. drawBlurBackground
+  // (playback.js) now sizes its canvas against ONE fixed ceiling shared by
+  // every surface that reveals it (desktop player bar, desktop bar+lyrics,
+  // mobile mini player, mobile full player) - expanding/collapsing changes
+  // how much of that canvas is currently revealed (via .player-blur-clip's
+  // overflow:hidden), never the canvas's own size or content. Redrawing
+  // here would re-shuffle the mosaic's cell placement on every tap for no
+  // visual need, which is exactly the "canvas regenerates when it's not
+  // supposed to" bug the ceiling was designed to prevent in the first
+  // place (see that function's comment) - it was only ever needed here
+  // while the mobile ceiling was still wrongly tied to the currently-
+  // expanded height instead of the shared one.
 }
 // Tapping anywhere on the mini player (art/title/subtitle) opens the full
 // player — except its own buttons, which have their own actions.

@@ -255,6 +255,66 @@ async function listAudioRecursive(relPath) {
   return perEntryResults.flat();
 }
 
+// Fast path for the first N tracks of a folder, so the client can start
+// filling the queue immediately instead of waiting for listAudioRecursive
+// (below) to walk the entire subtree - for a large/deeply-nested folder that
+// full walk can take long enough that the queue sits at just the one
+// already-playing track the whole time.
+//
+// Reads from libIndex (the persisted, in-memory library index - see
+// "LIBRARY INDEX" further down) the same way pickRandomIndexedFile() does
+// for /api/expand/first: filtering already-loaded keys by path prefix
+// touches no filesystem, so this resolves near-instantly regardless of
+// folder size.
+//
+// Selection is a random sample across every matching path, NOT "the first N
+// alphabetically" - an alphabetical slice systematically favors whichever
+// subfolder happens to sort first (e.g. a multi-disc album's CD1 would fill
+// the entire batch before CD2 ever got a single track in), which then stayed
+// biased even after the client shuffles this batch, since shuffling only
+// reorders whichever tracks were already selected - it can't introduce
+// tracks that were never included in the first place. A random sample here
+// is what the client-side shuffle actually assumes it's working with: an
+// unbiased cross-section of the folder, not a biased one in random order.
+// Falls back to returning everything (still shuffled) if there are fewer
+// matching paths than the requested limit, same end result as before just
+// via a different (equivalent, since sampling all of a small pool is the
+// same as taking all of it) code path.
+//
+// The full /api/expand call the client makes afterward is still what
+// determines the final, authoritative full listing and its real order -
+// this is only ever a temporary head start.
+//
+// Falls back to an empty result (not an error) if the index has nothing
+// under this folder yet (e.g. no scan since server start) - the caller
+// already has to handle the full /api/expand response regardless, so an
+// empty fast-path result just means no head start this time.
+app.get('/api/expand/limit', async (req, res) => {
+  try {
+    const rel = req.query.path || '';
+    const limit = Math.max(1, Math.min(parseInt(req.query.limit, 10) || 50, 500));
+    const prefix = rel ? rel.replace(/[\\/]+$/, '') + path.sep : '';
+    const matching = Object.keys(libIndex).filter(p => !prefix || p.startsWith(prefix));
+    let files;
+    if (matching.length <= limit) {
+      files = matching;
+    } else {
+      // Partial Fisher-Yates: only shuffle as many positions as needed to
+      // fill `limit`, rather than shuffling (and sorting) the entire
+      // possibly-huge matching set just to take a slice of it.
+      for (let i = 0; i < limit; i++) {
+        const j = i + Math.floor(Math.random() * (matching.length - i));
+        [matching[i], matching[j]] = [matching[j], matching[i]];
+      }
+      files = matching.slice(0, limit);
+    }
+    res.json({ files });
+  } catch (err) {
+    logIssue(`GET /api/expand/limit?path=${req.query.path || ''} failed: ${err.message}`);
+    res.status(400).json({ error: err.message });
+  }
+});
+
 app.get('/api/expand', async (req, res) => {
   try {
     const rel = req.query.path || '';
@@ -458,6 +518,48 @@ function hashArtBuffer(buf) {
   return crypto.createHash('sha1').update(buf).digest('hex');
 }
 
+// ---- Concurrency limiter for metadata parsing ----
+// music-metadata is called with skipCovers:false in readMeta() below,
+// because artHash (the dedup key that lets many tracks sharing one embedded
+// cover all point at a single /api/art-by-hash URL) can only be computed
+// from the actual decoded picture bytes. That means every readMeta() call
+// on a track with embedded art briefly holds that full image (often
+// several MB, sometimes much more for high-res/uncompressed covers) in
+// memory for the duration of the parse.
+//
+// /api/meta/batch parses up to META_BATCH_LIMIT paths via Promise.all - if
+// that ran fully unbounded, a single batch for a large folder could hold
+// hundreds of these image buffers in memory simultaneously (500 tracks x a
+// few MB each is a multi-hundred-MB to multi-GB transient spike), and nothing
+// stops multiple such batches - from multiple tabs, or the queue vs. the
+// folder browser vs. a playlist all prefetching around the same time - from
+// piling up concurrently on top of each other. On a host without a memory
+// limit set (see docker-compose.yml), that's enough to trigger an OOM kill
+// of the whole container, which is indistinguishable from "the server just
+// restarted" from the outside.
+//
+// This runs every readMeta() parse (regardless of caller - single /api/meta
+// requests, batch requests, from any tab) through one shared pool capped at
+// a fixed number of concurrent parses, process-wide, so peak memory from
+// this specific workload stays bounded no matter how many requests ask for
+// it at once.
+const META_PARSE_CONCURRENCY = 8;
+let metaParseActive = 0;
+const metaParseWaiters = [];
+async function withMetaParseSlot(fn) {
+  if (metaParseActive >= META_PARSE_CONCURRENCY) {
+    await new Promise(resolve => metaParseWaiters.push(resolve));
+  }
+  metaParseActive++;
+  try {
+    return await fn();
+  } finally {
+    metaParseActive--;
+    const next = metaParseWaiters.shift();
+    if (next) next();
+  }
+}
+
 async function readMeta(rel) {
   const full = safeResolve(rel);
   const stat = await fsp.stat(full);
@@ -466,7 +568,7 @@ async function readMeta(rel) {
   const mm = await import('music-metadata');
   let data;
   try {
-    const parsed = await mm.parseFile(full, { duration: true, skipCovers: false });
+    const parsed = await withMetaParseSlot(() => mm.parseFile(full, { duration: true, skipCovers: false }));
     const rg = parsed.common.replaygain_track_gain;
     const pic = parsed.common.picture && parsed.common.picture[0];
     let artHash = null;
@@ -696,7 +798,12 @@ async function ensureLibraryIndex() {
             track: null, disc: null
           };
           try {
-            const parsed = await mm.parseFile(safeResolve(rel), { duration: true, skipCovers: false });
+            // skipCovers:true here (unlike readMeta() above) - this scan only
+            // needs hasArt as a boolean, never the actual picture bytes, so
+            // there's no reason to decode/hold potentially large embedded
+            // images in memory for every track in the entire library during a
+            // full scan.
+            const parsed = await withMetaParseSlot(() => mm.parseFile(safeResolve(rel), { duration: true, skipCovers: true }));
             entry.title = parsed.common.title || entry.title;
             entry.artist = parsed.common.artist || '';
             entry.albumartist = parsed.common.albumartist || '';
@@ -841,7 +948,7 @@ app.get('/api/meta', async (req, res) => {
 // through the same metaCache as the single-path endpoint, so results are
 // equally cheap on repeat calls; failures for individual paths don't fail
 // the whole batch.
-const META_BATCH_LIMIT = 500;
+const META_BATCH_LIMIT = 100;
 app.post('/api/meta/batch', async (req, res) => {
   try {
     const paths = Array.isArray(req.body.paths) ? req.body.paths.slice(0, META_BATCH_LIMIT) : [];

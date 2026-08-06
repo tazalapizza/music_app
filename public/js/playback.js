@@ -44,7 +44,18 @@ function playSingle(path) {
   renderQueue();
 }
 
-async function handleSongClick(item) {
+// Shared by handleSongClick/handleLibrarySongClick below: if the clicked
+// track is already in the queue, just jump to it; otherwise start playing
+// it immediately (no queue needed for that - just the one track) and build
+// the rest of the queue (via tracksFn(), folder listing or library view
+// depending on context) in the background, splicing it in once ready. The
+// tracksFn() fetch itself can be genuinely slow for a large folder (see
+// handleSongClick's /api/browse call below, which stats every file and
+// walks every subfolder for its counts) - awaiting it before playCurrent()
+// meant clicking a song sat on that entire fetch before any audio started,
+// same class of problem playFolder()/fillFolderQueueInBackground() already
+// solved for the "play whole folder" button.
+function handleSongClickWithTracks(item, tracksFn) {
   const idx = queue.findIndex(t => t.path === item.path);
   if (idx !== -1) {
     if (idx === queueIndex) return; // already playing this exact track
@@ -52,32 +63,37 @@ async function handleSongClick(item) {
     playCurrent();
     return;
   }
-  // Not in the queue: enqueue every song in its containing folder (not subfolders) and play this one.
-  const folder = dirNameOf(item.path);
-  const { items } = await api(`/api/browse?path=${encodeURIComponent(folder)}`);
-  const tracks = items.filter(i => i.isAudio).map(f => ({ path: f.path, name: f.name }));
-  const clickedIndex = tracks.findIndex(t => t.path === item.path);
-  resetQueue(tracks.length ? tracks : [{ path: item.path, name: item.name }]);
-  queueIndex = clickedIndex >= 0 ? clickedIndex : 0;
+  resetQueue([{ path: item.path, name: item.name }]);
+  queueIndex = 0;
   playCurrent();
   renderQueue();
+  (async () => {
+    const tracks = await tracksFn();
+    // The user may have already skipped away (played something else,
+    // cleared the queue) by the time this resolves - don't clobber
+    // whatever's playing now with a stale fetch's tracks.
+    if (!(queue.length === 1 && queue[0].path === item.path && queueIndex === 0)) return;
+    const clickedIndex = tracks.findIndex(t => t.path === item.path);
+    resetQueue(tracks.length ? tracks : [{ path: item.path, name: item.name }]);
+    queueIndex = clickedIndex >= 0 ? clickedIndex : 0;
+    renderQueue();
+  })();
 }
 
+// Not in the queue: enqueue every song in the clicked track's containing
+// folder (not subfolders) and play this one.
+function handleSongClick(item) {
+  return handleSongClickWithTracks(item, async () => {
+    const folder = dirNameOf(item.path);
+    const { items } = await api(`/api/browse?path=${encodeURIComponent(folder)}`);
+    return items.filter(i => i.isAudio).map(f => ({ path: f.path, name: f.name }));
+  });
+}
+
+// Not in the queue: enqueue every song in the current artist/album library
+// view and play this one.
 function handleLibrarySongClick(item) {
-  const idx = queue.findIndex(t => t.path === item.path);
-  if (idx !== -1) {
-    if (idx === queueIndex) return; // already playing this exact track
-    queueIndex = idx;
-    playCurrent();
-    return;
-  }
-  // Not in the queue: enqueue every song in this artist/album view and play this one.
-  const tracks = lastFetchedItems.map(f => ({ path: f.path, name: f.name }));
-  const clickedIndex = tracks.findIndex(t => t.path === item.path);
-  resetQueue(tracks.length ? tracks : [{ path: item.path, name: item.name }]);
-  queueIndex = clickedIndex >= 0 ? clickedIndex : 0;
-  playCurrent();
-  renderQueue();
+  return handleSongClickWithTracks(item, () => lastFetchedItems.map(f => ({ path: f.path, name: f.name })));
 }
 
 async function playFolder(item) {
@@ -106,18 +122,75 @@ async function playFolder(item) {
 // (folders start shuffled by default; see playFolder), with the track
 // that's already playing left in place rather than restarted, and
 // everything else randomized around it.
+//
+// Two stages: first /api/expand/limit, a fast approximate-order fetch from
+// the server's in-memory library index (near-instant, no filesystem walk -
+// see its own comment in server.js), gets a first batch of real tracks into
+// the queue right away instead of leaving it stuck at just the one playing
+// track for however long the full recursive listing takes on a large
+// folder. Then /api/expand, the full authoritative recursive walk, replaces
+// it with the complete, correctly-ordered list once that's ready. Both
+// stages go through the same staleness guard, so if the user has already
+// skipped away by the time either resolves, neither clobbers whatever's
+// actually playing now.
 async function fillFolderQueueInBackground(item, firstTrack) {
+  const stillOnThisFolder = () => queue.length >= 1 && queue[0].path === firstTrack.path && queueIndex === 0;
+
+  function shuffle(arr) {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+  }
+
+  let quickOrder = null; // paths in the order stage 1 displayed them, if it ran
+
+  try {
+    const { files: quickFiles } = await api(`/api/expand/limit?path=${encodeURIComponent(item.path)}&limit=${currentChunkSize() === Infinity ? 50 : currentChunkSize()}`);
+    // Only worth showing if it actually got more than just the track
+    // already playing - an empty/single-file result (e.g. index not warmed
+    // up yet for this folder) isn't an improvement over the current state,
+    // so skip straight to the full listing below rather than render a
+    // pointless intermediate queue update.
+    if (quickFiles.length > 1 && stillOnThisFolder()) {
+      const rest = shuffle(quickFiles.filter(f => f !== firstTrack.path));
+      const quickTracks = [firstTrack, ...rest.map(f => ({ path: f, name: fileNameOf(f) }))];
+      quickOrder = quickTracks.map(t => t.path);
+      resetQueue(quickTracks);
+      queueIndex = 0;
+      shuffled = true;
+      updateShuffleBtnState();
+      renderQueue();
+    }
+  } catch {
+    // Fast path failing entirely is fine - the full listing below is what
+    // actually matters, this was purely a head start.
+  }
+
   const { files } = await api(`/api/expand?path=${encodeURIComponent(item.path)}`);
   // The user may have already skipped away from the folder entirely
   // (played something else, cleared the queue) by the time this resolves —
   // don't clobber whatever's playing now with a stale folder's tracks.
-  if (!(queue.length === 1 && queue[0].path === firstTrack.path)) return;
-  const rest = files.filter(f => f !== firstTrack.path).map(f => ({ path: f, name: fileNameOf(f) }));
-  for (let i = rest.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [rest[i], rest[j]] = [rest[j], rest[i]];
+  if (!stillOnThisFolder()) return;
+
+  let tracks;
+  if (quickOrder) {
+    // Keep the order stage 1 already showed for every track it displayed -
+    // re-shuffling everything here would visibly reshuffle/replace rows the
+    // user is already looking at. Only the tracks stage 1's approximate
+    // index didn't have yet are new here; those get shuffled in on their
+    // own and appended, so the queue grows rather than jumps around.
+    const filesSet = new Set(files);
+    const stillPresent = quickOrder.filter(p => filesSet.has(p));
+    const known = new Set(stillPresent);
+    const newFiles = shuffle(files.filter(f => !known.has(f)));
+    tracks = [...stillPresent, ...newFiles].map(f => ({ path: f, name: fileNameOf(f) }));
+  } else {
+    const rest = shuffle(files.filter(f => f !== firstTrack.path));
+    tracks = [firstTrack, ...rest.map(f => ({ path: f, name: fileNameOf(f) }))];
   }
-  const tracks = [firstTrack, ...rest];
+
   resetQueue(tracks);
   queueIndex = 0;
   if (tracks.length > 1) {
@@ -127,7 +200,16 @@ async function fillFolderQueueInBackground(item, firstTrack) {
   renderQueue();
 }
 
-// ---------- Synced marquee (title + file name scroll at same speed, hold, wait for both) ----------
+// ---------- Player bar title/path marquee ----------
+// Hand-built rather than routed through the generic runMarqueeClock system
+// (layout-init.js): title and path here are a tight, always-scrolling pair
+// with their own dedicated sync group, whereas the generic system is built
+// around many independent/hover-gated targets sharing looser page-wide or
+// isolated-root groups. Both systems could in principle be unified (the
+// title/path markup already has the right shape - a lone <span> child - for
+// the generic system's own wrapping), but that would change which elements
+// this pair syncs its cycle with, so it's being left separate for now
+// rather than folded in without being able to verify the result.
 const MARQUEE_SPEED = 40;   // px per second, same for both lines
 const MARQUEE_GAP = 40;     // px of blank space before text reappears
 const MARQUEE_HOLD = 1000;  // ms held at the start position each cycle
@@ -144,7 +226,7 @@ function startMarquee(nameSpan, pathSpan) {
   stopMarquee();
   // reset position before measuring
   nameSpan.style.transform = 'translateX(0)';
-  pathSpan.style.transform = 'translateX(0)';
+  if (pathSpan) pathSpan.style.transform = 'translateX(0)';
 
   // Guards against a stale pending measurement winning a race if
   // startMarquee() is called again before this call's own
@@ -156,11 +238,22 @@ function startMarquee(nameSpan, pathSpan) {
   requestAnimationFrame(() => {
     if (token !== marqueeToken) return; // superseded by a newer startMarquee() call
     const nameWrap = nameSpan.closest('.marquee-wrap');
-    const pathWrap = pathSpan.closest('.marquee-wrap');
     const nameOverflow = nameSpan.scrollWidth - nameWrap.clientWidth;
-    const pathOverflow = pathSpan.scrollWidth - pathWrap.clientWidth;
-
     const nameDist = nameOverflow > 0 ? nameSpan.scrollWidth - nameWrap.clientWidth + MARQUEE_GAP : 0;
+
+    // pathSpan is null when it holds the stacked artist/album lines (see
+    // applyMeta in playback.js) - those truncate independently via CSS
+    // (.pb-link-line's own overflow:hidden/ellipsis) rather than being
+    // measured/scrolled here. text-overflow:ellipsis is purely visual and
+    // doesn't shrink an element's own scrollWidth, so measuring the
+    // container span in that mode would still read as "overflowing" even
+    // though it's already correctly truncated - motion here would be
+    // spurious, not a fix for anything actually cut off. Skipping the
+    // measurement entirely (rather than measuring and getting 0 some other
+    // way) is what keeps the two stacked lines truly independent: nothing
+    // here ever transforms them as one shared unit.
+    const pathWrap = pathSpan ? pathSpan.closest('.marquee-wrap') : null;
+    const pathOverflow = pathSpan ? pathSpan.scrollWidth - pathWrap.clientWidth : 0;
     const pathDist = pathOverflow > 0 ? pathSpan.scrollWidth - pathWrap.clientWidth + MARQUEE_GAP : 0;
 
     if (nameDist === 0 && pathDist === 0) return; // nothing overflows, stay put
@@ -177,6 +270,7 @@ function startMarquee(nameSpan, pathSpan) {
       const t = (ts - start) % cycle;
 
       const applyPos = (span, dist, dur) => {
+        if (!span) return;
         if (dist === 0 || t < MARQUEE_HOLD) {
           span.style.transform = 'translateX(0)';
           return;
@@ -202,6 +296,44 @@ function startMarquee(nameSpan, pathSpan) {
 // ---------- Player bar visibility ----------
 const playerBarEl = document.getElementById('playerBar');
 function showPlayerBar() { playerBarEl.classList.remove('hidden'); document.querySelector('.lyrics-box-wrap').classList.remove('hidden'); }
+
+// Measures #playerBar's COLLAPSED height specifically - used as the base
+// term of drawBlurBackground's one shared height ceiling (see the long
+// comment there). Reading playerBarEl.getBoundingClientRect() directly
+// would return whichever height it currently has, which on mobile varies
+// between the collapsed strip and the expanded full player - using that
+// live value as the ceiling's base is exactly the "recompute per-state"
+// bug that comment warns against, since it would make the canvas get
+// resized (and re-shuffled) every time the user expands or collapses.
+//
+// Collapsed height is cached after the first successful measurement and
+// reused from then on, rather than re-measured on every draw - it only
+// actually changes on a real layout change (window resize, orientation
+// change, crossing the mobile breakpoint), which the existing 'resize'
+// listener already triggers a redraw for anyway (see below), so the cache
+// gets refreshed there. If #playerBar happens to be expanded (mobile full
+// player open) at the moment this first runs, its rect is skipped in favor
+// of the CSS-computed collapsed height instead of caching a wrong value.
+let cachedCollapsedPlayerBarH = null;
+function collapsedPlayerBarHeight() {
+  const isExpanded = playerBarEl.classList.contains('expanded');
+  if (!isExpanded) {
+    const h = playerBarEl.getBoundingClientRect().height || 0;
+    if (h > 0) cachedCollapsedPlayerBarH = h;
+    return cachedCollapsedPlayerBarH || h;
+  }
+  if (cachedCollapsedPlayerBarH != null) return cachedCollapsedPlayerBarH;
+  // No cached value yet and currently expanded (e.g. page loaded straight
+  // into the expanded state) - briefly toggle the class off to measure the
+  // real collapsed height, then restore it. This runs at most once per
+  // page load in this specific edge case.
+  playerBarEl.classList.remove('expanded');
+  const h = playerBarEl.getBoundingClientRect().height || 0;
+  playerBarEl.classList.add('expanded');
+  cachedCollapsedPlayerBarH = h;
+  return h;
+}
+
 function hidePlayerBar() {
   playerBarEl.classList.add('hidden');
   playerArtTrackPath = null; // invalidate any in-flight updatePlayerArt fetch for the track that was playing
@@ -214,6 +346,11 @@ function hidePlayerBar() {
 
   // Fade out the global background
   document.documentElement.style.setProperty('--blur-opacity', '0');
+  // Nothing's playing/visible - #playerBar's own fallback fill (mobile
+  // only, see responsive.css) should be fully opaque so it's in the
+  // correct state if/when the player reopens, matching applyBlurColors'
+  // no-art branch.
+  document.documentElement.style.setProperty('--player-fallback-opacity', '1');
   
   const lbWrap = document.querySelector('.lyrics-box-wrap');
   lbWrap.classList.add('hidden');
@@ -267,7 +404,7 @@ function playCurrent() {
     fpSeekBarEl.style.setProperty('--buffered-pct', '0%');
   }
   audioEl.playbackRate = speeds[speedIndex];
-  audioEl.play();
+  safePlay();
   showPlayerBar();
   const nameEl = document.getElementById('trackName');
   const pathEl = document.getElementById('trackPath');
@@ -280,17 +417,26 @@ function playCurrent() {
   function applyMeta(meta) {
     nameEl.querySelector('span').textContent = meta.title || track.name;
     const pathSpan = pathEl.querySelector('span');
-    if (meta.artist || meta.album) {
+    const hasTwoLines = !!(meta.artist || meta.album);
+    // Drives .track-path span.track-path-lines in player.css: that span
+    // needs to behave as a normal block box (stretching to #trackPath's
+    // real width) in two-line mode, instead of its usual inline-block
+    // content-sizing, so .pb-link-line children actually get a real width
+    // boundary to overflow against - see that rule's own comment for why.
+    pathSpan.classList.toggle('track-path-lines', hasTwoLines);
+    if (hasTwoLines) {
       // Artist and album render on their own line each (rather than one
       // "Artist • Album" line) so pathEl.innerHTML — mirrored verbatim
       // into #miniPlayerSubtitle/#fpSubtitle by layout-init.js — carries
-      // that same two-line structure everywhere it's reused. Each line is
-      // its own block-level .pb-link-line so CSS can ellipsis-truncate it
-      // independently; the player-bar's hand-built marquee (startMarquee,
-      // below) only scrolls the *first* line horizontally the same way it
-      // always scrolled the whole thing, since it has no notion of
-      // multi-line content — the second line relies on CSS ellipsis
-      // instead, same as every other truncated two-line label in the app.
+      // that same two-line structure everywhere it's reused. Each line
+      // independently ellipsis-truncates via CSS (.pb-link-line in
+      // player.css) - startMarquee() below is passed null for the path
+      // span in this mode instead of trying to scroll the two-line block
+      // as one unit, which used to move both lines together whenever
+      // either one overflowed (a transform on the shared container moves
+      // every child with it - there's no way to marquee just one of two
+      // stacked children). Matches the approach already used on mobile
+      // (see responsive.css) for the same stacked-pair case.
       pathSpan.innerHTML = '';
       if (meta.artist) {
         const line = document.createElement('div');
@@ -315,7 +461,26 @@ function playCurrent() {
     } else {
       pathSpan.textContent = track.path;
     }
-    startMarquee(nameEl.querySelector('span'), pathSpan);
+    startMarquee(nameEl.querySelector('span'), hasTwoLines ? null : pathSpan);
+    // pathSpan.innerHTML/textContent above wipes any marquee wrapper the
+    // generic system (scanMarquees/MARQUEE_TARGETS, layout-init.js)
+    // previously created around #trackPath .pb-link-line - that system is
+    // what actually measures/animates the two-line artist/album case now
+    // (see the comment above), since startMarquee() only handles the
+    // single-line fallback here. The generic MutationObserver would
+    // eventually re-wrap/re-measure on its own 120ms debounce, but calling
+    // it explicitly here - same as every other place in the app that
+    // rebuilds marquee-target content (syncMiniPlayerText, syncFpTitle,
+    // syncFpUpcoming) - re-measures immediately against the real, current
+    // text instead of depending on that timing. No root argument (unlike
+    // those other call sites, which scope to their own container) because
+    // the #trackPath .pb-link-line selector is ID-anchored - querying
+    // FROM pathEl itself (#trackPath) would require #trackPath to be a
+    // descendant of itself, which never matches; this needs an ancestor
+    // of #trackPath as the scan root, and document is the simplest correct
+    // one (verified: querying from pathEl's own parent, or document,
+    // finds both lines; querying from pathEl itself finds zero).
+    if (hasTwoLines) scanMarquees();
   }
 
   // Metadata for this track may already be cached (re-visiting a track,
@@ -553,15 +718,33 @@ function drawBlurBackground(sourceImg, seedKey) {
   const visibleW = blurGroup.clientWidth || 1;
   // Draw for the TRUE ceiling of how tall this panel could ever be - not
   // "however tall it happens to be right now". Using the current height
-  // (even just when the lyrics panel happens to be open) meant every drag
-  // of the resize handle produced a differently-sized, differently-
-  // shuffled canvas on every tick, which made the artwork behind the
-  // player bar visibly shift during a resize even though that portion is
-  // never supposed to change. The true ceiling is the player bar's own
-  // height (always visible, fixed by its content) plus the largest the
-  // lyrics panel can ever be dragged to (see the matching cap in the
-  // lyrics resize handler, window.innerHeight - 220).
-  const playerBarH = playerBarEl.getBoundingClientRect().height || 0;
+  // (even just when the lyrics panel happens to be open, or - on mobile -
+  // when the full player happens to be expanded) means every state change
+  // produces a differently-sized, differently-shuffled canvas, which makes
+  // the artwork visibly shift/reshuffle on every expand/collapse even
+  // though the underlying source art hasn't changed. There is exactly ONE
+  // ceiling, shared by every surface that reveals this canvas (desktop
+  // player bar, desktop player bar + lyrics panel, mobile mini player,
+  // mobile full player) - all four are just different-sized windows onto
+  // the same underlying mosaic, the same way opening the lyrics panel on
+  // desktop reveals more of the same canvas rather than generating a new
+  // one. That ceiling is: the collapsed player bar's own height (fixed,
+  // content-driven, identical on desktop and mobile-collapsed) plus the
+  // largest the desktop lyrics panel can ever be dragged to (see the
+  // matching cap in the lyrics resize handler, window.innerHeight - 220) -
+  // mobile's full player never exceeds that same ceiling in practice since
+  // it's bounded by the viewport itself, so no separate mobile-only term is
+  // needed; using one shared ceiling everywhere is what keeps the mosaic
+  // visually identical across every surface, exactly matching how desktop
+  // resizing already stays stable.
+  //
+  // Collapsed height specifically (not whatever #playerBar's height
+  // happens to be right now) is read via a dedicated measurement rather
+  // than the live element, since #playerBar's own current height varies
+  // by state (collapsed strip vs. expanded full player on mobile) and
+  // reading it live here would reintroduce exactly the "recompute the
+  // ceiling per-state" bug this comment opens with.
+  const playerBarH = collapsedPlayerBarHeight();
   const maxLyricsH = window.innerHeight - 220;
   const maxVisibleH = playerBarH + Math.max(0, maxLyricsH);
 
@@ -748,6 +931,12 @@ function drawBlurBackground(sourceImg, seedKey) {
 let lastBlurSourceImg = null;
 let lastBlurSeedKey = null;
 window.addEventListener('resize', () => {
+  // A real resize can change the collapsed player bar's own height (e.g.
+  // orientation change, crossing the mobile breakpoint, resizing a desktop
+  // window narrow enough to wrap content) - invalidate the cache so
+  // collapsedPlayerBarHeight() re-measures instead of returning a now-stale
+  // value from before the resize.
+  cachedCollapsedPlayerBarH = null;
   if (lastBlurSourceImg) drawBlurBackground(lastBlurSourceImg, lastBlurSeedKey);
 });
 
@@ -755,6 +944,13 @@ function applyBlurColors(sourceImg, seedKey, accentColor) {
   const root = document.documentElement.style;
   if (!sourceImg || !accentColor) {
     root.setProperty('--blur-opacity', '0');
+    // No real mosaic to show (no art, or accent-color extraction failed) -
+    // #playerBar's own fallback fill (see responsive.css) needs to be
+    // fully opaque here, since there's nothing else behind it to guarantee
+    // legible contrast for the controls/text on top, or to fill the
+    // near-fullscreen mobile full player with anything other than
+    // whatever page content happens to be behind it.
+    root.setProperty('--player-fallback-opacity', '1');
     root.setProperty('--accent-color', '#e8e8ea');
     lastBlurSourceImg = null;
     lastBlurSeedKey = null;
@@ -764,6 +960,11 @@ function applyBlurColors(sourceImg, seedKey, accentColor) {
   lastBlurSeedKey = seedKey;
   drawBlurBackground(sourceImg, seedKey);
   root.setProperty('--blur-opacity', '1');
+  // A real mosaic is showing - #playerBar's own fill (mobile only, see
+  // responsive.css) should get out of the way entirely so the mosaic's
+  // actual sampled colors read through, rather than being muddied by a
+  // dark tint sitting on top of it.
+  root.setProperty('--player-fallback-opacity', '0');
   // Clamp to a legible lightness/saturation range so the accent color
   // harmonizes with the mosaic background without disappearing on very
   // light or very dark album art.
@@ -781,6 +982,11 @@ function updatePlayerArt(trackPath) {
 
   // Temporarily fade out background while the new image loads
   document.documentElement.style.setProperty('--blur-opacity', '0');
+  // Same reasoning as applyBlurColors' no-art branch: no mosaic is visible
+  // during this loading gap, so the fallback fill needs to be opaque for
+  // it. applyBlurColors (called once the new art's colors are extracted,
+  // shortly after this) flips it back to 0 if that succeeds.
+  document.documentElement.style.setProperty('--player-fallback-opacity', '1');
 
   // Use a separate offscreen image for color sampling so we don't affect
   // the visible <img>'s crossOrigin/loading behavior.
@@ -878,7 +1084,7 @@ function playPrev() {
 audioEl.addEventListener('ended', () => {
   if (loopMode === 'one') {
     audioEl.currentTime = 0;
-    audioEl.play();
+    safePlay();
     return;
   }
   const hasNext = queueIndex < queue.length - 1;

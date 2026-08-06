@@ -430,13 +430,38 @@
        own parent, which now owns the blur canvas AND the fixed
        positioning/transform) actually shows through behind it — a solid
        fill here would otherwise completely hide the blur regardless of
-       how correctly that layer itself is positioned. */
-    background: rgba(23, 23, 26, 0.72);
-    backdrop-filter: blur(1px);
-    -webkit-backdrop-filter: blur(1px);
+       how correctly that layer itself is positioned.
+       Opacity is driven by --player-fallback-opacity (set in playback.js,
+       default 1 in base.css) rather than a fixed number: opaque (1) only
+       when there's genuinely no mosaic to show - no art yet, extraction
+       failed, or between tracks while new art loads - and fully
+       transparent (0) whenever a real mosaic IS showing, so its actual
+       sampled colors read through with nothing muddying them. Previously a
+       fixed 0.72 (later 0.25) sat on top of the mosaic at all times
+       regardless of whether one was actually visible, which is what made
+       mobile look muddy compared to desktop's #playerBar (no background or
+       backdrop-filter of its own at all - see player.css) even after the
+       mosaic generation itself was made platform-identical. */
+    background: rgb(23 23 26 / var(--player-fallback-opacity, 1));
+    /* background-color specifically (not a shorthand "transition: all" or
+       bare "transition") - crossfades this fill in step with
+       .player-blur-bg's own "transition: opacity 0.5s ease-in-out" (see
+       player.css) so the fallback fading out and the mosaic fading in read
+       as one smooth handoff instead of this snapping instantly while the
+       mosaic underneath eases in. Scoped to this one property so it can't
+       reintroduce the transform-duplication bug described below (which is
+       why this element still has no transform/transition of its own for
+       anything else). */
+    transition: background-color 0.5s ease-in-out;
+    /* Removed backdrop-filter: blur(1px) - an extra blur pass stacked on
+       top of the canvas's own filter: blur(50px) (see .player-blur-bg in
+       player.css), with no desktop equivalent, contributing to the same
+       mobile-only muddiness as the opacity above. The canvas is already
+       fully blurred before it ever reaches this element; there is nothing
+       left here that benefits from being blurred a second time. */
     border-top: 1px solid #2a2a2e;
     border-radius: 0;
-    /* No transform/transition of its own — .player-blur-group (the
+    /* No transform of its own — .player-blur-group (the
        parent) now owns that exclusively. Duplicating it here (as before)
        meant #playerBar's fixed positioning + its own separate transform
        were compounding on top of the parent's already-fixed, already-
@@ -498,11 +523,12 @@
     color: #a8a8ae;
     overflow: hidden;
   }
-  /* Artist and album each get their own ellipsis-truncated line (see
-     .pb-link-line in player.css) instead of the marquee scrolling — these
-     two were removed from MARQUEE_TARGETS in layout-init.js since the
-     marquee model is built for a single scrolling line, not a stacked
-     pair. */
+  /* Artist and album each get their own ellipsis-truncated line at rest,
+     and their own independent marquee entry when overflowing (see
+     .pb-link-line in MARQUEE_TARGETS, layout-init.js) - added there
+     individually rather than as .mini-player-subtitle as a whole, so each
+     line scrolls fully independently of its sibling instead of moving
+     together (see the long comment on .pb-link-line in player.css). */
   .mini-player-subtitle .pb-link-line {
     overflow: hidden;
     text-overflow: ellipsis;
@@ -672,9 +698,10 @@
     min-width: 0;
     overflow: hidden;
   }
-  /* Same reasoning as .mini-player-subtitle in this file: artist/album
-     stack as two ellipsis-truncated lines instead of marqueeing, since
-     .fp-subtitle was removed from MARQUEE_TARGETS in layout-init.js. */
+  /* Same reasoning as .mini-player-subtitle in this file: each line is its
+     own independent marquee entry (.pb-link-line in MARQUEE_TARGETS,
+     layout-init.js), ellipsis-truncated at rest and scrolling on its own
+     when it overflows. */
   .fp-subtitle .pb-link-line {
     overflow: hidden;
     text-overflow: ellipsis;
@@ -815,10 +842,9 @@
     color: #a8a8ae;
     overflow: hidden;
   }
-  /* Artist/album stack as two ellipsis-truncated lines instead of
-     marqueeing (same reasoning as .mini-player-subtitle/.fp-subtitle in
-     this file) — .fp-upcoming-subtitle was removed from MARQUEE_TARGETS
-     in layout-init.js. */
+  /* Same reasoning as .mini-player-subtitle/.fp-subtitle in this file:
+     each line is its own independent marquee entry (.pb-link-line in
+     MARQUEE_TARGETS, layout-init.js). */
   .fp-upcoming-subtitle .pb-link-line {
     overflow: hidden;
     text-overflow: ellipsis;

@@ -33,6 +33,14 @@ body {
   --blur-color-3: #2a2a2e;
   --blur-color-4: #2a2a2e;
   --blur-opacity: 0;
+  /* Drives #playerBar's own fallback fill opacity on mobile (see
+     responsive.css) - 1 (fully opaque) whenever there's no real mosaic to
+     show behind it (matches --blur-opacity: 0's default here), 0 once a
+     track's art/colors have actually been extracted (see applyBlurColors
+     in playback.js, the only place this and --blur-opacity change
+     together). Keeping this default in sync with --blur-opacity's default
+     matters: both start meaning "nothing to show yet". */
+  --player-fallback-opacity: 1;
   --accent-color: #e8e8ea;
   --bottom-nav-h: 0px;
   --safe-bottom: env(safe-area-inset-bottom, 0px);
@@ -159,17 +167,18 @@ input[type="checkbox"]:indeterminate::after {
 }
 
 /* ---------------------------------------------------------------------------
-   Generic overflow marquee — reusable site-wide equivalent of the player
-   bar's .marquee-wrap (player.css), which is hand-built for exactly two
-   synced spans (title+path) and isn't reusable as-is for single, unrelated
-   pieces of text elsewhere (queue items, file names, playlist names, etc).
+   Generic overflow marquee — reusable site-wide marquee for independent,
+   unrelated pieces of text (queue items, file names, playlist names, the
+   player bar's own artist/album lines, etc). The player bar's title+path
+   pair has its own separate hand-built version (see startMarquee() in
+   playback.js) for reasons noted there.
 
    No CSS animation here on purpose — every overflowing+visible element on
    screen must scroll in lockstep (start together, hold together, and only
    loop back to start once every one of them has finished), which a
    per-element CSS @keyframes animation can't express since each element's
    scroll distance/duration naturally differs. Driven entirely by
-   runGlobalMarqueeClock() in layout-init.js instead: a single shared
+   runMarqueeClock() in layout-init.js instead: a single shared
    requestAnimationFrame loop sets transform directly on every active
    element using one shared cycle length (the slowest element's duration),
    so they all move and pause as one group regardless of individual text
@@ -178,14 +187,30 @@ input[type="checkbox"]:indeterminate::after {
 
    Desktop: scrolls on hover only (a static ellipsis at rest is calmer for
    a page with many rows, and hover is a natural "I want to read this"
-   signal that touch devices don't have) — see marquee-hover-active in
-   layout-init.js.
+   signal that touch devices don't have) — gated in JS via
+   activeMarqueeEntries()'s matchMedia('(hover: hover)') check
+   (layout-init.js), not a CSS media query.
    Mobile: scrolls automatically after a brief pause, since there's no
-   hover — gated by the (hover: none) media query already used elsewhere
-   in this codebase (responsive.css) for the same touch/no-touch split.
+   hover — the same check above simply includes every overflowing element
+   unconditionally when hover isn't supported.
 --------------------------------------------------------------------------- */
 .marquee-generic { overflow: hidden; white-space: nowrap; position: relative; display: block; }
 .marquee-generic > span { display: inline-block; will-change: transform; }
+/* wrapWhole:true targets that also carry their own static
+   text-overflow:ellipsis (e.g. .mini-player-title, .fp-title,
+   .fp-upcoming-title, .lib-name, .file-name, .album-card-name - see their
+   definitions in responsive.css/filelist.css) have that ellipsis on the
+   CONTAINER itself (.marquee-generic is added directly to them, same
+   element) - a different element from the span runMarqueeClock actually
+   transforms (see layout-init.js: the span is created fresh as a child of
+   the container). .marquee-active is added to BOTH the container and the
+   span while active (see runMarqueeClock) specifically so this rule and
+   the wrapWhole:false rule below can each target their own element -
+   .marquee-generic.marquee-active neutralizes the container's own
+   ellipsis while its child span is scrolling, since text-overflow:ellipsis
+   is evaluated at the container's own rendering step independent of a
+   child's position/transform. */
+.marquee-generic.marquee-active { text-overflow: clip; }
 /* wrapWhole:false case (e.g. .file-title wrapping .cell-text): the
    container becomes the clipping box, exactly like .marquee-generic above.
    Its child (.cell-text) has its own overflow:hidden/text-overflow:

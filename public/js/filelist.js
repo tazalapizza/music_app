@@ -194,9 +194,15 @@ function updateSortIndicators() {
   });
 }
 
+// Columns whose sort order depends on fetched metadata rather than data
+// already on the item object (name/size/isDir come from the folder listing
+// itself). Shared by applySort() and its callers, so "which columns need
+// metadata" is defined once instead of duplicated at each call site.
+const METADATA_SORT_COLUMNS = new Set(['title', 'artist', 'album', 'duration']);
+
 async function applySort(items) {
   if (!sortColumn) return items;
-  if (sortColumn === 'title' || sortColumn === 'artist' || sortColumn === 'album' || sortColumn === 'duration') {
+  if (METADATA_SORT_COLUMNS.has(sortColumn)) {
     await prefetchMeta(items.filter(i => i.isAudio).map(i => i.path));
   }
   const dir = sortDir === 'asc' ? 1 : -1;
@@ -270,6 +276,15 @@ function renderPaginated(container, items, buildRow, chunkSize = currentChunkSiz
       sentinel.remove();
       paginationLoaders.delete(container);
     }
+    // Rows built here can include marquee targets (queue/playlist row
+    // titles, file names, etc. - see MARQUEE_TARGETS in layout-init.js).
+    // The generic debounced MutationObserver rescan would technically
+    // still catch this insertion, but every other place in the app that
+    // adds marquee-target content calls scanMarquees() directly rather
+    // than relying on that alone - matching that pattern here too, for a
+    // chunk of rows that's about to actually become visible right after
+    // the IntersectionObserver fires for it.
+    if (typeof scanMarquees === 'function') scanMarquees(container);
   }
 
   // Lets a caller (e.g. "scroll to the playing track") force-render enough
@@ -297,11 +312,32 @@ async function renderFileList(items) {
   lastFetchedIsSearch = false;
   fileListWrap.classList.remove('album-view');
   const filtered = applyHideNonMusicFilter(items);
-  // Every row displays title/artist/album/duration via getMeta regardless of
-  // sort column, so prefetch in one batch call rather than letting each row
-  // fire its own /api/meta request.
-  await prefetchMeta(filtered.filter(i => i.isAudio).map(i => i.path));
+  // Metadata is prefetched in the background rather than awaited here.
+  // Awaiting a full-folder batch before rendering a single row means quick
+  // repeat navigation (double-click, rapid back/forward, browsing fast)
+  // stacks up multiple in-flight renderFileList() calls racing each other -
+  // an older call's prefetch can resolve after a newer folder has already
+  // replaced it, and large folders turn each navigation into its own
+  // hundreds-of-files server-side metadata parse, piling up concurrently.
+  // (See renderQueue() in queue-playlists.js for the same fix applied
+  // there, and the reasoning in more detail.)
+  //
+  // Skipped when sorting by a metadata column: applySort() below already
+  // awaits its own prefetch for exactly the same paths in that case (it
+  // has to - there's no valid row order to render before that data
+  // exists), so firing it here too would just be the same batch request
+  // sent twice at once.
+  const isMetaSort = METADATA_SORT_COLUMNS.has(sortColumn);
+  if (!isMetaSort) {
+    prefetchMeta(filtered.filter(i => i.isAudio).map(i => i.path));
+  }
   const sorted = await applySort(filtered);
+  // A newer renderFileList() call may have started (and possibly already
+  // finished) while applySort() above was resolving for this one - only the
+  // most recently *started* call should be allowed to actually paint the
+  // list, or a slower older call finishing later would clobber a faster
+  // newer one's rows with stale data.
+  if (items !== lastFetchedItems) return;
   lastRenderedItems = sorted;
   fileList.innerHTML = '';
   renderPaginated(fileList, sorted, (item) => buildFileRow(item));
@@ -350,7 +386,24 @@ async function renderSearchResults(items) {
   const isArtistView = libraryView && libraryView.type === 'artist';
   fileListWrap.classList.toggle('album-view', !!isAlbumView);
 
-  await prefetchMeta(filtered.filter(i => i.isAudio).map(i => i.path));
+  // Album view needs disc/track metadata up front to group rows correctly
+  // (disc headers are structural, not cosmetic) - artist view and the
+  // default listing group nothing metadata-dependent, so their rows can
+  // render immediately and upgrade in place via buildFileRow's own
+  // getMeta() call, same as the folder browser (see renderFileList).
+  // applySort() awaits its own prefetch when actually sorting by a
+  // metadata column, so this only needs to cover the still-uncovered case:
+  // album view with no explicit sort, which skips applySort() entirely.
+  if (isAlbumView) {
+    await prefetchMeta(filtered.filter(i => i.isAudio).map(i => i.path));
+  } else if (!METADATA_SORT_COLUMNS.has(sortColumn)) {
+    prefetchMeta(filtered.filter(i => i.isAudio).map(i => i.path));
+  }
+  // A newer renderSearchResults() call (e.g. the user kept typing) may have
+  // started, and even already cleared+rebuilt fileList, while the prefetch
+  // above was resolving for this older call - bail before it appends
+  // anything on top of a different search's results.
+  if (items !== lastFetchedItems) return;
 
   if (isAlbumView) {
     // Group by disc first - sorting (explicit or default) only ever reorders
@@ -361,6 +414,7 @@ async function renderSearchResults(items) {
     for (const disc of discs) {
       const group = filtered.filter(i => (i.disc || 1) === disc);
       const sortedGroup = sortColumn ? await applySort(group) : sortByDiscTrackDefault(group);
+      if (items !== lastFetchedItems) return; // same guard, re-checked after each per-disc await
       if (showDiscHeaders) {
         const header = document.createElement('div');
         header.className = 'disc-header';
@@ -377,6 +431,7 @@ async function renderSearchResults(items) {
     const sorted = sortColumn
       ? await applySort(filtered)
       : (isArtistView ? sortByAlbumDiscTrackDefault(filtered) : [...filtered].sort((a, b) => (a.isDir === b.isDir) ? 0 : (a.isDir ? -1 : 1)));
+    if (items !== lastFetchedItems) return;
     lastRenderedItems = sorted;
     renderPaginated(fileList, sorted, (item) => buildFileRow(item, { showOpenFolder: true, showFullPath: item.isDir }));
   }

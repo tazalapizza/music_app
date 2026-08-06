@@ -118,13 +118,38 @@
 .now-playing-text { overflow: hidden; min-width: 0; }
 .marquee-wrap { overflow: hidden; white-space: nowrap; position: relative; }
 .track-name { font-size: 13px; font-weight: 600; display: inline-block; }
-.track-path { font-size: 11px; color: #c8c8ce; display: inline-block; }
+/* #trackPath has two modes (see applyMeta in playback.js): a single-line
+   raw file path (no artist/album), or two stacked .pb-link-line children
+   (artist + album). Each mode needs different sizing:
+   - Single-line: #trackPath and its span can both stay inline-block
+     (content-sized) - an inline-block can render wider than .marquee-wrap
+     and still be correctly clipped by that ancestor's own overflow:hidden,
+     with .marquee-wrap's real width being what startMarquee() (playback.js)
+     measures against.
+   - Two-line: .pb-link-line is its own independent marquee target (see
+     MARQUEE_TARGETS in layout-init.js - each line scrolls separately so
+     they don't move together, unlike the single shared span startMarquee()
+     would otherwise treat them as), which means IT measures against
+     .clientWidth on #trackPath/its span directly, not .marquee-wrap. Since
+     nothing in an inline-block chain is ever narrower than its own
+     content, that measurement would always read "not overflowing"
+     regardless of actual text length - there's simply no real width
+     boundary to be too big for. #trackPath needs display:block (stretches
+     to .marquee-wrap's real width, like a normal block child) and its span
+     needs the same via .track-path-lines, a class applyMeta toggles for
+     exactly this mode. min-width:0 on both is the standard fix that lets a
+     flex/block child actually shrink below its own content instead of
+     just growing to fit it. */
+.track-path { font-size: 11px; color: #c8c8ce; display: block; min-width: 0; }
 .track-name span, .track-path span { display: inline-block; will-change: transform; }
-/* Artist and album render as two stacked lines (see applyMeta in
-   playback.js) inside the single span the marquee still translates as one
-   unit horizontally — .pb-link-line just stacks them vertically within
-   that span rather than changing how the marquee itself measures/moves. */
-.pb-link-line { display: block; line-height: 1.35; }
+.track-path span.track-path-lines { display: block; min-width: 0; }
+.pb-link-line {
+  display: block;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 #muteIconOn.hidden, #muteIconOff.hidden { display: none; }
 #closePlayerBtn { margin-left: 4px; }
 .player-controls { flex: 1; display: flex; align-items: center; gap: 10px; }
