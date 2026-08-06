@@ -172,7 +172,7 @@ function buildQueueRow(track, i) {
     removeFromQueueAt(idx);
     if (idx < queueIndex) queueIndex--;
     if (queue.length === 0) {
-      audioEl.pause();
+      NativeAudioAdapter.pause();
       queueIndex = -1;
       hidePlayerBar();
       document.getElementById('trackName').querySelector('span').textContent = '';

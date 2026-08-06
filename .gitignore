@@ -1,3 +1,5 @@
 docker-compose.yml
 Dockerfile
 data/
+node_modules/
+android/

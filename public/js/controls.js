@@ -90,7 +90,7 @@ function renderSpeedMenu() {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       speedIndex = i;
-      audioEl.playbackRate = speeds[speedIndex];
+      NativeAudioAdapter.setRate(speeds[speedIndex]);
       updateSpeedBtn();
       speedMenu.classList.add('hidden');
     });
@@ -121,15 +121,22 @@ function setMuteIcon(isMuted) {
 function updateVolumeBarFill() {
   volumeBar.style.setProperty('--volume-pct', volumeBar.value + '%');
 }
+// STEP 1: this is the actual point of the native-audio migration - iOS
+// Safari/WKWebView silently ignores audioEl.volume entirely (a longstanding
+// Apple platform restriction, not a bug in this app - see the long comment
+// at the top of native-audio-adapter.js). NativeAudioAdapter.setVolume()
+// routes to the real native player's volume on iOS/Android, and falls back
+// to plain audioEl.volume on web, so this one call site now works correctly
+// on every platform.
 volumeBar.addEventListener('input', (e) => {
-  audioEl.volume = e.target.value / 100;
-  audioEl.muted = false;
+  NativeAudioAdapter.setVolume(e.target.value / 100);
+  NativeAudioAdapter.setMuted(false);
   setMuteIcon(e.target.value == 0);
   updateVolumeBarFill();
 });
 muteBtn.addEventListener('click', () => {
-  audioEl.muted = !audioEl.muted;
-  setMuteIcon(audioEl.muted);
+  NativeAudioAdapter.setMuted(!NativeAudioAdapter.muted());
+  setMuteIcon(NativeAudioAdapter.muted());
 });
 updateVolumeBarFill();
 
@@ -149,8 +156,8 @@ document.getElementById('deleteTrackBtn').addEventListener('click', async () => 
   // browser fire 'ended' while the API call is still in flight, which
   // races playNext() against this handler's own queueIndex/queue updates
   // below and can leave queueIndex pointing at the wrong track.
-  audioEl.pause();
-  audioEl.removeAttribute('src');
+  NativeAudioAdapter.pause();
+  audioEl.removeAttribute('src'); // web path only; harmless no-op on native
   audioEl.load();
   await api('/api/delete', {
     method: 'DELETE', headers: {'Content-Type':'application/json'},

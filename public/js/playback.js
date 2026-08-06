@@ -358,8 +358,8 @@ function hidePlayerBar() {
   document.getElementById('lyricsBox').classList.remove('open');
   lyricsBoxOpen = false;
   stopMarquee();
-  audioEl.pause();
-  audioEl.removeAttribute('src');
+  NativeAudioAdapter.pause();
+  audioEl.removeAttribute('src'); // web path only; harmless no-op on native (audioEl isn't the active player there)
   setPlayPauseIcon(false);
   seekBarEl.value = 0;
   seekBarEl.style.setProperty('--played-pct', '0%'); 
@@ -387,7 +387,42 @@ function playCurrent() {
   if (queueIndex < 0 || queueIndex >= queue.length) return;
   justEnded = false;
   const track = queue[queueIndex];
-  audioEl.src = `/api/stream?path=${encodeURIComponent(track.path)}`;
+  // STEP 3: pass along cached title/artist/album/art (when already warm -
+  // see the metaCache lookup and its own long comment further below) so
+  // the lock-screen/Control Center Now Playing display is correct from the
+  // very first preload() call rather than showing nothing/generic info
+  // until some later update. NativeAudio's preload() is the only call that
+  // accepts notificationMetadata at all (no separate "update metadata on an
+  // already-loaded track" API exists) - so when metadata ISN'T cached yet
+  // (a track played for the first time this session), the lock screen will
+  // show generic/no info for this track rather than retroactively
+  // correcting itself once getMeta() resolves below. A real gap, not
+  // silently ignored: revisit if this turns out to be common enough to
+  // matter (the cache warms up fast in practice - see metaCache's own
+  // prefetching elsewhere in the app - so most skips within a session
+  // should already hit the cached branch).
+  const cachedMetaForLoad = metaCache[track.path];
+  const loadMeta = cachedMetaForLoad ? {
+    title: cachedMetaForLoad.title || track.name,
+    artist: cachedMetaForLoad.artist || undefined,
+    album: cachedMetaForLoad.album || undefined,
+    artworkUrl: cachedMetaForLoad.hasArt ? `${location.origin}/api/art?path=${encodeURIComponent(track.path)}` : undefined
+  } : { title: track.name };
+  // STEP 2 FIX: on native, play() must not fire until preload() has actually
+  // resolved (NativeAudio has no internal queueing of "play as soon as
+  // ready" the way a browser's <audio> element does - calling play() before
+  // preload() finishes is a real race, not just a cosmetic one). load()
+  // itself is still not awaited here, so the rest of playCurrent()'s
+  // synchronous UI reset (seek bar, marquee, art) isn't held up by a native
+  // round-trip - safePlay() is chained onto the same promise instead,
+  // deliberately not awaited either, so playCurrent() itself stays
+  // synchronous end-to-end exactly as it was before this file existed. On
+  // web, load() resolves synchronously in practice (plain audioEl.src
+  // assignment, no real async work), so this preserves the exact previous
+  // timing there.
+  NativeAudioAdapter.load(`/api/stream?path=${encodeURIComponent(track.path)}`, loadMeta).then(safePlay);
+  nativeCurrentTimeSec = 0;
+  nativeDurationSec = NaN;
   seekBarEl.value = 0;
   seekBarEl.style.setProperty('--played-pct', '0%'); seekBarEl.style.setProperty('--buffered-pct', '0%');
   // #fpSeekBar (mobile full player) only mirrors #seekBar inside
@@ -403,8 +438,14 @@ function playCurrent() {
     fpSeekBarEl.style.setProperty('--played-pct', '0%');
     fpSeekBarEl.style.setProperty('--buffered-pct', '0%');
   }
-  audioEl.playbackRate = speeds[speedIndex];
-  safePlay();
+  NativeAudioAdapter.setRate(speeds[speedIndex]);
+  // STEP 2: on native, safePlay() is already chained onto NativeAudioAdapter
+  // .load()'s promise above (to avoid the play-before-preload-finishes race)
+  // - calling it again here unconditionally would double-fire play() on
+  // native. On web, load() has no real async work to wait for, so calling
+  // it directly here (as before) keeps playback starting exactly as
+  // promptly as it always did.
+  if (!NativeAudioAdapter.isNative()) safePlay();
   showPlayerBar();
   const nameEl = document.getElementById('trackName');
   const pathEl = document.getElementById('trackPath');
@@ -1032,30 +1073,36 @@ document.getElementById('playPauseBtn').addEventListener('click', () => {
       queueIndex = 0;
       playCurrent();
     } else {
-      audioEl.currentTime = 0;
+      NativeAudioAdapter.seekTo(0);
       safePlay();
     }
     return;
   }
-  if (audioEl.paused) {
+  if (NativeAudioAdapter.paused()) {
     safePlay();
   } else {
-    audioEl.pause();
+    NativeAudioAdapter.pause();
+    stopSeekLoop();
     setPlayPauseIcon(false);
   }
 });
 
-// Wraps audioEl.play() so the icon only flips to "playing" once playback
-// has actually started, and so a suspended ReplayGain AudioContext (the
+// Wraps NativeAudioAdapter.play() (audioEl.play() on web, NativeAudio.play()
+// on native - see native-audio-adapter.js) so the icon only flips to
+// "playing" once playback has actually started, and so a suspended
+// ReplayGain AudioContext (the
 // PWA-background culprit — see the visibility/pageshow handling further
 // down) gets resumed first. Without this, coming back from background with
 // replayGainEnabled on left the context suspended, so .play() would
 // silently produce no audio while the icon claimed it was playing.
 function safePlay() {
-  if (audioCtx && audioCtx.state === 'suspended') {
+  // ReplayGain's WebAudio graph (audioCtx/gainNode) only exists on the web
+  // path - see state.js. NativeAudioAdapter.isNative() short-circuits this
+  // on native, where audioCtx is never created in the first place.
+  if (!NativeAudioAdapter.isNative() && audioCtx && audioCtx.state === 'suspended') {
     audioCtx.resume().catch(() => {});
   }
-  const p = audioEl.play();
+  const p = NativeAudioAdapter.play();
   if (p && typeof p.then === 'function') {
     p.then(() => setPlayPauseIcon(true)).catch(() => setPlayPauseIcon(false));
   } else {
@@ -1081,9 +1128,14 @@ function playPrev() {
     playCurrent();
   }
 }
-audioEl.addEventListener('ended', () => {
+// STEP 2: shared by both the web audioEl 'ended' listener below and the
+// native NativeAudioAdapter.onEnded() callback (registered further down) -
+// "a track finished playing on its own" means the same thing on both
+// platforms, so the loop/next-track decision lives in exactly one place
+// rather than being duplicated per platform and risking drift.
+function handleTrackEndedNaturally() {
   if (loopMode === 'one') {
-    audioEl.currentTime = 0;
+    NativeAudioAdapter.seekTo(0);
     safePlay();
     return;
   }
@@ -1095,13 +1147,30 @@ audioEl.addEventListener('ended', () => {
     justEnded = true;
     setPlayPauseIcon(false);
   }
-});
+}
+audioEl.addEventListener('ended', handleTrackEndedNaturally);
+// Native has no per-element DOM events - NativeAudioAdapter.onEnded()
+// registers a callback invoked from the plugin's 'stop' listener (see
+// native-audio-adapter.js). This is a no-op on web, so it's safe to always
+// call. Registered once, at script-eval time - not per-track - since
+// onEnded() just appends to a list, matching addEventListener's semantics.
+NativeAudioAdapter.onEnded(handleTrackEndedNaturally);
 
 const seekBarEl = document.getElementById('seekBar');
 let seekDragging = false;
 let seekRAF = null;
 
+// STEP 2 NOTE: buffered-download progress (the lighter "how much has
+// loaded" fill behind the played-position fill) has no equivalent in
+// NativeAudio's API at all - it doesn't expose buffer/download state, only
+// position and duration. On native this returns 0, which the callers below
+// already treat correctly (bufferedPct just floors to playedPct via the
+// Math.max in updateSeekBarVisual, so the buffered fill simply tracks the
+// played fill instead of showing a separate readahead - not wrong, just
+// less informative than on web). Revisit only if NativeAudio adds buffer
+// reporting; there's nothing to poll around this today.
 function getBufferedEndPercent() {
+  if (NativeAudioAdapter.isNative()) return 0;
   if (!audioEl.duration || !isFinite(audioEl.duration) || !audioEl.buffered.length) return 0;
   const t = audioEl.currentTime;
   for (let i = 0; i < audioEl.buffered.length; i++) {
@@ -1113,33 +1182,95 @@ function getBufferedEndPercent() {
   return (audioEl.buffered.end(0) / audioEl.duration) * 100;
 }
 
+// currentTimeSec/durationSec: on web these just read audioEl's synchronous
+// properties (unchanged from before). On native they mirror the values
+// pushed by NativeAudioAdapter's 'currentTime' event (~100ms cadence, see
+// onTimeUpdate below) rather than being fetched here, since
+// updateSeekBarVisual/updateSeekDisplay are called from several synchronous
+// call sites (playCurrent's reset, seek-drag handlers) that can't await a
+// round-trip without visibly stalling the UI - this mirrors the same
+// tradeoff audioEl itself makes (.currentTime reads whatever the last known
+// position was, not a guaranteed-fresh value), just with a pushed event
+// standing in for what the browser normally does internally.
+let nativeCurrentTimeSec = 0;
+let nativeDurationSec = NaN;
+function currentTimeSec() { return NativeAudioAdapter.isNative() ? nativeCurrentTimeSec : audioEl.currentTime; }
+function durationSec() { return NativeAudioAdapter.isNative() ? nativeDurationSec : audioEl.duration; }
+
 function updateSeekBarVisual() {
-  if (!audioEl.duration || !isFinite(audioEl.duration)) return;
-  const playedPct = Math.min(100, (audioEl.currentTime / audioEl.duration) * 100);
+  const duration = durationSec();
+  if (!duration || !isFinite(duration)) return;
+  const playedPct = Math.min(100, (currentTimeSec() / duration) * 100);
   const bufferedPct = Math.max(playedPct, Math.min(100, getBufferedEndPercent()));
   seekBarEl.style.setProperty('--played-pct', playedPct + '%');
   seekBarEl.style.setProperty('--buffered-pct', bufferedPct + '%');
 }
 
 function updateSeekDisplay() {
-  if (audioEl.duration) {
+  const duration = durationSec();
+  if (duration && isFinite(duration)) {
     if (!seekDragging) {
-      seekBarEl.value = (audioEl.currentTime / audioEl.duration) * 100;
+      seekBarEl.value = (currentTimeSec() / duration) * 100;
     }
     updateSeekBarVisual();
-    const remaining = audioEl.duration - audioEl.currentTime;
+    const remaining = duration - currentTimeSec();
     document.getElementById('timeDisplay').textContent =
-      `${formatTime(audioEl.currentTime)} / -${formatTime(remaining)}`;
+      `${formatTime(currentTimeSec())} / -${formatTime(remaining)}`;
   }
 }
+
+// REVISED: earlier versions of this file drove native time updates with a
+// requestAnimationFrame poll loop that round-tripped to
+// NativeAudioAdapter.getCurrentTime() every tick. NativeAudioAdapter now
+// pushes position updates itself via the plugin's real 'currentTime' event
+// (~100ms cadence - see native-audio-adapter.js), so this just mirrors that
+// pushed value into nativeCurrentTimeSec/nativeDurationSec and re-runs the
+// same updateSeekDisplay used on web - no polling, no per-tick round-trip.
+//
+// This also replaces the old shared "nativePollSubscribers" mechanism:
+// other files (layout-init.js's fpSeekBar mirroring, synced lyrics, etc.)
+// now subscribe directly via NativeAudioAdapter.onTimeUpdate(), the same
+// event this listener itself is one subscriber of, rather than piggy-
+// backing on a poll loop defined here.
+// getCurrentTime()/getDuration() are both plain synchronous reads now (see
+// their comments in native-audio-adapter.js) - liveCurrentTime is kept
+// current by the plugin's pushed 'currentTime' event itself, so there's no
+// async round-trip left to wait on here, and this can update
+// nativeCurrentTimeSec/nativeDurationSec and call updateSeekDisplay in one
+// synchronous pass per event tick (no one-tick lag from an unresolved
+// promise, which an earlier .then()-based version of this had).
+NativeAudioAdapter.onTimeUpdate(() => {
+  if (seekDragging) return;
+  nativeCurrentTimeSec = NativeAudioAdapter.getCurrentTime();
+  const d = NativeAudioAdapter.getDuration();
+  if (typeof d === 'number' && isFinite(d) && d > 0) nativeDurationSec = d;
+  updateSeekDisplay();
+});
 
 function seekLoop() {
   updateSeekDisplay();
   seekRAF = requestAnimationFrame(seekLoop);
 }
-function startSeekLoop() { if (!seekRAF) seekRAF = requestAnimationFrame(seekLoop); }
-function stopSeekLoop() { if (seekRAF) cancelAnimationFrame(seekRAF); seekRAF = null; }
+// Web-only now: native no longer needs a driving loop of its own (the
+// 'currentTime' event above drives updateSeekDisplay directly whenever the
+// native side pushes a new tick), so startSeekLoop/stopSeekLoop are no-ops
+// on native.
+function startSeekLoop() {
+  if (NativeAudioAdapter.isNative()) return;
+  if (!seekRAF) seekRAF = requestAnimationFrame(seekLoop);
+}
+function stopSeekLoop() {
+  if (NativeAudioAdapter.isNative()) return;
+  if (seekRAF) cancelAnimationFrame(seekRAF);
+  seekRAF = null;
+}
 
+// startSeekLoop/stopSeekLoop are now web-only (see their own comments
+// above) - on native, updateSeekDisplay is driven directly by the
+// 'currentTime' event subscription further up this file, so there's no
+// loop left to start/stop there. Calling these unconditionally alongside
+// every adapter play/pause call site is still correct and harmless: they
+// simply no-op on native.
 audioEl.addEventListener('play', startSeekLoop);
 audioEl.addEventListener('pause', stopSeekLoop);
 audioEl.addEventListener('ended', stopSeekLoop);
@@ -1149,8 +1280,9 @@ audioEl.addEventListener('loadedmetadata', updateSeekBarVisual);
 
 seekBarEl.addEventListener('pointerdown', () => { seekDragging = true; });
 seekBarEl.addEventListener('input', (e) => {
-  if (audioEl.duration) {
-    audioEl.currentTime = (e.target.value / 100) * audioEl.duration;
+  const duration = durationSec();
+  if (duration) {
+    NativeAudioAdapter.seekTo((e.target.value / 100) * duration);
   }
 });
 seekBarEl.addEventListener('change', () => { seekDragging = false; });

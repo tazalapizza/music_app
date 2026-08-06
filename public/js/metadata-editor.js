@@ -654,31 +654,40 @@ document.addEventListener('keydown', (e) => {
 
   if (e.altKey) return;
 
-  if (!audioEl.duration || !isFinite(audioEl.duration)) return;
+  // STEP 2: durationSec()/currentTimeSec() are playback.js helpers - on web
+  // they're plain audioEl reads (unchanged), on native they read the
+  // adapter's polled cache (see the seek-bar section of playback.js). Seeking
+  // itself goes through NativeAudioAdapter.seekTo() either way.
+  if (!durationSec() || !isFinite(durationSec())) return;
 
   if (e.key === 'ArrowLeft') {
     e.preventDefault();
-    audioEl.currentTime = Math.max(0, audioEl.currentTime - settings.seekBack);
+    NativeAudioAdapter.seekTo(Math.max(0, currentTimeSec() - settings.seekBack));
   } else if (e.key === 'ArrowRight') {
     e.preventDefault();
-    audioEl.currentTime = Math.min(audioEl.duration, audioEl.currentTime + settings.seekForward);
+    NativeAudioAdapter.seekTo(Math.min(durationSec(), currentTimeSec() + settings.seekForward));
   }
 });
 
 // remember volume between sessions, if enabled
+// STEP 1: goes through NativeAudioAdapter so the saved volume actually
+// takes effect on native too, not just on web - previously this only ever
+// touched audioEl.volume, which is correct for web but was a silent no-op
+// for the whole point of this app on iOS (see native-audio-adapter.js).
 if (settings.rememberVolume) {
   try {
     const savedVol = localStorage.getItem('musicapp-volume');
     if (savedVol !== null) {
-      audioEl.volume = parseFloat(savedVol);
-      volumeBar.value = Math.round(audioEl.volume * 100);
+      const vol = parseFloat(savedVol);
+      NativeAudioAdapter.setVolume(vol);
+      volumeBar.value = Math.round(vol * 100);
       updateVolumeBarFill();
     }
   } catch {}
 }
 volumeBar.addEventListener('change', () => {
   if (settings.rememberVolume) {
-    try { localStorage.setItem('musicapp-volume', audioEl.volume); } catch {}
+    try { localStorage.setItem('musicapp-volume', volumeBar.value / 100); } catch {}
   }
 });
 

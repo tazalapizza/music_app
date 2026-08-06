@@ -106,30 +106,41 @@ function ensureAudioGraph() {
   gainNode = audioCtx.createGain();
   source.connect(gainNode).connect(audioCtx.destination);
 }
-// ReplayGain is temporarily disabled on mobile: it requires permanently
-// rerouting audio through a WebAudio graph (see createMediaElementSource
-// below), and mobile OSes suspend/kill WebAudio-routed audio far more
-// aggressively than a plain <audio> element in the background — this was
-// causing unreliable background playback and a stuck-audio-loop bug on
-// resume. The setting/UI and all the graph code are left intact; this is
-// the single choke point every call site (playback.js, settings-auth-
-// toast-lyrics.js) goes through, so gating it here disables ReplayGain
-// everywhere on mobile without touching anything else. Revisit once the
-// WebAudio graph is made robust to backgrounding (rebuild-on-resume, etc).
+// ReplayGain is temporarily disabled on *web* mobile viewports: it requires
+// permanently rerouting audio through a WebAudio graph (see
+// createMediaElementSource below), and mobile browser OSes suspend/kill
+// WebAudio-routed audio far more aggressively than a plain <audio> element
+// in the background — this was causing unreliable background playback and a
+// stuck-audio-loop bug on resume. The setting/UI and all the graph code are
+// left intact; this is the single choke point every call site (playback.js,
+// settings-auth-toast-lyrics.js) goes through, so gating it here disables
+// ReplayGain on web mobile without touching anything else.
+//
+// STEP 3: on native, none of that applies — NativeAudioAdapter.setReplayGainFactor()
+// sets a plain native player volume multiplier, not a WebAudio graph, so
+// there's no backgrounding risk to gate against. REPLAYGAIN_MOBILE_QUERY
+// (a *viewport width* check) is intentionally NOT used to gate the native
+// path: it's a proxy for "mobile browser layout", not "native app", and a
+// native app on a wide/tablet viewport should still get the native
+// ReplayGain path, while a same-width *web* mobile view correctly keeps
+// using the disabled/GainNode-avoidance behavior below.
 const REPLAYGAIN_MOBILE_QUERY = window.matchMedia('(max-width: 780px)');
 function applyReplayGain(db) {
-  if (REPLAYGAIN_MOBILE_QUERY.matches) {
-    if (gainNode) gainNode.gain.value = 1;
+  const clamped = (typeof db === 'number') ? Math.min(db, RG_MAX_BOOST_DB) : 0;
+  const factor = Math.pow(10, clamped / 20);
+
+  if (NativeAudioAdapter.isNative()) {
+    NativeAudioAdapter.setReplayGainFactor(settings.replayGainEnabled ? factor : 1);
     return;
   }
-  if (!settings.replayGainEnabled) {
+
+  if (REPLAYGAIN_MOBILE_QUERY.matches || !settings.replayGainEnabled) {
     if (gainNode) gainNode.gain.value = 1;
     return;
   }
   ensureAudioGraph();
   if (audioCtx.state === 'suspended') audioCtx.resume();
-  const clamped = (typeof db === 'number') ? Math.min(db, RG_MAX_BOOST_DB) : 0;
-  gainNode.gain.value = Math.pow(10, clamped / 20);
+  gainNode.gain.value = factor;
 }
 const fileList = document.getElementById('fileList');
 const breadcrumb = document.getElementById('breadcrumb');

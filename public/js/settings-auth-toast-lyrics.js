@@ -284,8 +284,10 @@ async function loadLyricsForTrack(trackPath) {
 
 function updateLyricsSync() {
   if (!currentLyrics || !currentLyrics.lines.length || !lyricsLinesEl.children.length) return;
-  const t = audioEl.currentTime;
-  const dur = audioEl.duration;
+  // STEP 2: currentTimeSec()/durationSec() - playback.js helpers, audioEl
+  // reads on web (unchanged), polled cache on native.
+  const t = currentTimeSec();
+  const dur = durationSec();
 
   if (currentLyrics.synced) {
     if (!currentLyrics.interpolatedLines && dur && isFinite(dur)) {
@@ -311,6 +313,10 @@ function updateLyricsSync() {
   }
 }
 audioEl.addEventListener('timeupdate', updateLyricsSync);
+// Native has no timeupdate event - piggyback on NativeAudioAdapter's real
+// 'currentTime' event instead (see comment on updateFpTimeDisplay in
+// layout-init.js).
+NativeAudioAdapter.onTimeUpdate(updateLyricsSync);
 
 function toggleLyricsBox() {
   lyricsBoxOpen = !lyricsBoxOpen;

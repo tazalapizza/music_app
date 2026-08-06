@@ -970,9 +970,11 @@ const fpSeekBar = document.getElementById('fpSeekBar');
 const fpTimeElapsed = document.getElementById('fpTimeElapsed');
 const fpTimeRemaining = document.getElementById('fpTimeRemaining');
 function updateFpTimeDisplay() {
-  if (!audioEl.duration || !isFinite(audioEl.duration)) return;
-  fpTimeElapsed.textContent = formatTime(audioEl.currentTime);
-  fpTimeRemaining.textContent = '-' + formatTime(audioEl.duration - audioEl.currentTime);
+  // STEP 2: durationSec()/currentTimeSec() from playback.js - audioEl reads
+  // on web (unchanged), the adapter's polled cache on native.
+  if (!durationSec() || !isFinite(durationSec())) return;
+  fpTimeElapsed.textContent = formatTime(currentTimeSec());
+  fpTimeRemaining.textContent = '-' + formatTime(durationSec() - currentTimeSec());
   if (document.activeElement !== fpSeekBar) fpSeekBar.value = seekBarEl.value;
   // The colored progress line is drawn via a background-gradient keyed off
   // these two custom properties (see player.css), set as inline styles on
@@ -983,6 +985,14 @@ function updateFpTimeDisplay() {
 }
 audioEl.addEventListener('timeupdate', updateFpTimeDisplay);
 audioEl.addEventListener('loadedmetadata', updateFpTimeDisplay);
+// On native, audioEl never fires timeupdate/loadedmetadata (native
+// playback doesn't touch audioEl at all - see native-audio-adapter.js), so
+// there's nothing for the two listeners above to piggyback on there.
+NativeAudioAdapter.onEnded(updateFpTimeDisplay); // covers the final tick when a track finishes
+// Native has no timeupdate/loadedmetadata events - piggyback on
+// NativeAudioAdapter's 'currentTime' event instead (fires ~100ms while
+// playing, pushed by the plugin - see native-audio-adapter.js).
+NativeAudioAdapter.onTimeUpdate(updateFpTimeDisplay);
 fpSeekBar.addEventListener('input', () => {
   seekBarEl.value = fpSeekBar.value;
   seekBarEl.dispatchEvent(new Event('input', { bubbles: true }));
@@ -1072,7 +1082,9 @@ mirrorButton(document.getElementById('fpShuffleBtn'), document.getElementById('s
   }
 
   function applySeek(offset) {
-    if (!audioEl.duration || !isFinite(audioEl.duration)) return;
+    // STEP 2: durationSec()/currentTimeSec() are playback.js helpers - see
+    // the comment on the keyboard-seek fix in metadata-editor.js for why.
+    if (!durationSec() || !isFinite(durationSec())) return;
     // Only triggers on a full slide (dragged all the way to MAX_DRAG), not
     // a partial/half slide — small threshold below 1 to comfortably
     // account for the pointer letting go a pixel or two shy of the exact
@@ -1080,9 +1092,9 @@ mirrorButton(document.getElementById('fpShuffleBtn'), document.getElementById('s
     const revealFrac = Math.abs(offset) / MAX_DRAG;
     if (revealFrac < TRIGGER_THRESHOLD) return;
     if (offset < 0) {
-      audioEl.currentTime = Math.min(audioEl.duration, audioEl.currentTime + settings.seekForward);
+      NativeAudioAdapter.seekTo(Math.min(durationSec(), currentTimeSec() + settings.seekForward));
     } else {
-      audioEl.currentTime = Math.max(0, audioEl.currentTime - settings.seekBack);
+      NativeAudioAdapter.seekTo(Math.max(0, currentTimeSec() - settings.seekBack));
     }
   }
 
@@ -1161,7 +1173,7 @@ const fpSpeedBtn = document.getElementById('fpSpeedBtn');
 const realSpeedBtn = document.getElementById('speedBtn');
 fpSpeedBtn.addEventListener('click', () => {
   speedIndex = (speedIndex + 1) % speeds.length;
-  audioEl.playbackRate = speeds[speedIndex];
+  NativeAudioAdapter.setRate(speeds[speedIndex]);
   updateSpeedBtn();
 });
 new MutationObserver(() => { fpSpeedBtn.textContent = realSpeedBtn.textContent; })
@@ -1217,9 +1229,9 @@ mirrorLyricsContent();
 // Mobile is always auto-scroll (no manual/auto switch exposed), so this
 // mirrors the same "active line" highlight desktop's updateLyricsSync
 // computes, using the same currentLyrics global it maintains.
-audioEl.addEventListener('timeupdate', () => {
+function updateMobileLyricsSync() {
   if (!currentLyrics || !currentLyrics.lines.length || !mobileLyricsLines.children.length) return;
-  const t = audioEl.currentTime;
+  const t = currentTimeSec(); // STEP 2: playback.js helper - audioEl.currentTime on web, polled cache on native
   if (!currentLyrics.synced) return; // unsynced lyrics have no per-line active state to mirror
   const syncLines = currentLyrics.interpolatedLines || currentLyrics.lines;
   let activeIdx = -1;
@@ -1233,7 +1245,11 @@ audioEl.addEventListener('timeupdate', () => {
   if (activeIdx >= 0 && children[activeIdx]) {
     children[activeIdx].scrollIntoView({ block: 'center', behavior: 'smooth' });
   }
-});
+}
+audioEl.addEventListener('timeupdate', updateMobileLyricsSync);
+// Native has no timeupdate event - piggyback on NativeAudioAdapter's real
+// 'currentTime' event instead (see comment on updateFpTimeDisplay above).
+NativeAudioAdapter.onTimeUpdate(updateMobileLyricsSync);
 
 fpLyricsBtn.addEventListener('click', () => {
   const showing = document.getElementById('fpArtRow').classList.toggle('showing-lyrics');
@@ -1354,28 +1370,43 @@ if ('mediaSession' in navigator) {
   // a separate action and unaffected, so dragging the lock-screen progress
   // bar still works either way.
   function registerMediaSessionActionHandlers() {
-    trySetActionHandler('play', () => { if (audioEl.paused) realPlayPauseBtn.click(); });
-    trySetActionHandler('pause', () => { if (!audioEl.paused) realPlayPauseBtn.click(); });
+    trySetActionHandler('play', () => { if (NativeAudioAdapter.paused()) realPlayPauseBtn.click(); });
+    trySetActionHandler('pause', () => { if (!NativeAudioAdapter.paused()) realPlayPauseBtn.click(); });
     trySetActionHandler('previoustrack', () => realPrevBtn.click());
     trySetActionHandler('nexttrack', () => realNextBtn.click());
     trySetActionHandler('seekto', (details) => {
-      if (details.seekTime == null || !audioEl.duration) return;
+      // STEP 2: durationSec() - playback.js helper, see comment on the
+      // keyboard-seek fix in metadata-editor.js.
+      if (details.seekTime == null || !durationSec()) return;
       // Some platforms fire 'seekto' continuously while the user is still
       // dragging the OS scrubber (details.seeking === true) rather than
       // only on release — setting currentTime on every intermediate event
       // is fine for a plain <audio> element (no extra buffering cost like
       // <video>), so no special-casing needed there.
-      audioEl.currentTime = details.seekTime;
+      NativeAudioAdapter.seekTo(details.seekTime);
     });
   }
   registerMediaSessionActionHandlers();
   audioEl.addEventListener('play', registerMediaSessionActionHandlers);
+  // STEP 2: on native, audioEl never fires 'play' (native playback doesn't
+  // touch audioEl - see native-audio-adapter.js's header comment) -
+  // onPlayStarted() is the adapter's native equivalent, fired from
+  // NativeAudioAdapter.play(). Re-running this per-play is intentional
+  // either way — see the long comment above this function about iOS's
+  // selective MediaRemote bridge.
+  NativeAudioAdapter.onPlayStarted(registerMediaSessionActionHandlers);
 
   function updateMediaSessionPlaybackState() {
-    navigator.mediaSession.playbackState = audioEl.paused ? 'paused' : 'playing';
+    navigator.mediaSession.playbackState = NativeAudioAdapter.paused() ? 'paused' : 'playing';
   }
   audioEl.addEventListener('play', updateMediaSessionPlaybackState);
   audioEl.addEventListener('pause', updateMediaSessionPlaybackState);
+  // Native has no 'play'/'pause' DOM events - driven from the real
+  // 'currentTime' event instead (cheap and idempotent to call every tick,
+  // same reasoning as registerMediaSessionActionHandlers above), plus
+  // onEnded for the final transition to 'paused' when a track completes.
+  NativeAudioAdapter.onTimeUpdate(updateMediaSessionPlaybackState);
+  NativeAudioAdapter.onEnded(updateMediaSessionPlaybackState);
 
   // Position state (duration/position/playbackRate) is what drives iOS's
   // lock-screen progress scrubber — but reporting it also makes iOS
@@ -1388,17 +1419,19 @@ if ('mediaSession' in navigator) {
   const ENABLE_MEDIA_SESSION_POSITION_STATE = false;
   function updateMediaSessionPosition() {
     if (!ENABLE_MEDIA_SESSION_POSITION_STATE) return;
-    if (!audioEl.duration || !isFinite(audioEl.duration) || audioEl.duration <= 0) return;
+    // STEP 2: durationSec()/currentTimeSec() - playback.js helpers, see
+    // comment on the keyboard-seek fix in metadata-editor.js.
+    if (!durationSec() || !isFinite(durationSec()) || durationSec() <= 0) return;
     try {
       navigator.mediaSession.setPositionState({
-        duration: audioEl.duration,
-        playbackRate: audioEl.playbackRate || 1,
+        duration: durationSec(),
+        playbackRate: audioEl.playbackRate || 1, // STEP 2 NOTE: playbackRate/speed isn't part of the native-audio migration yet - audioEl.playbackRate stays authoritative on both platforms for now, since NativeAudio's own rate is set separately via speed-control code untouched by this step.
         // position must be < duration or the OS throws and rejects the
         // whole call, which if it happened on every single timeupdate tick
         // near the end of a track (or on a rounding edge) would mean the OS
         // never received a single valid position/duration pair — and some
         // platforms only enable a draggable scrubber once they have.
-        position: Math.min(audioEl.currentTime, audioEl.duration),
+        position: Math.min(currentTimeSec(), durationSec()),
       });
     } catch (e) {
       // Stale/inconsistent values during a track-change race — safe to
@@ -1408,6 +1441,12 @@ if ('mediaSession' in navigator) {
   audioEl.addEventListener('loadedmetadata', updateMediaSessionPosition);
   audioEl.addEventListener('timeupdate', updateMediaSessionPosition);
   audioEl.addEventListener('ratechange', updateMediaSessionPosition);
+  // Native has no loadedmetadata/timeupdate/ratechange events - piggyback
+  // on NativeAudioAdapter's real 'currentTime' event instead (see comment
+  // on updateFpTimeDisplay above). Currently a no-op either way while
+  // ENABLE_MEDIA_SESSION_POSITION_STATE stays false, but kept correct so
+  // flipping that flag later doesn't silently do nothing on native.
+  NativeAudioAdapter.onTimeUpdate(updateMediaSessionPosition);
   audioEl.addEventListener('seeked', updateMediaSessionPosition);
 }
 
@@ -1443,9 +1482,11 @@ function resyncPlaybackOnForeground() {
   if (audioCtx && audioCtx.state === 'suspended') {
     audioCtx.resume().catch(() => {});
   }
-  // Source of truth is always the real <audio> element's own paused state
-  // — never assume, never re-trigger playback here.
-  setPlayPauseIcon(!audioEl.paused);
+  // Source of truth is always the real playback state — never assume,
+  // never re-trigger playback here. NativeAudioAdapter.paused() reads
+  // audioEl.paused on web (unchanged) and the adapter's own tracked state on
+  // native.
+  setPlayPauseIcon(!NativeAudioAdapter.paused());
   if (typeof syncPlayPauseIcon === 'function') {
     const fpBtn = document.getElementById('fpPlayPauseBtn');
     const miniBtn = document.getElementById('miniPlayPauseBtn');
@@ -1453,7 +1494,7 @@ function resyncPlaybackOnForeground() {
     if (miniBtn) syncPlayPauseIcon(miniBtn);
   }
   if ('mediaSession' in navigator) {
-    navigator.mediaSession.playbackState = audioEl.paused ? 'paused' : 'playing';
+    navigator.mediaSession.playbackState = NativeAudioAdapter.paused() ? 'paused' : 'playing';
   }
 }
 document.addEventListener('visibilitychange', () => {
