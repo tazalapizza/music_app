@@ -21,6 +21,59 @@ function handleRowClickMobileAware(e, item, defaultAction) {
   handleRowClick(e, item, defaultAction);
 }
 
+// Long-press (touch/pen only) opens the row's options menu, matching the
+// mobile 3-dot button and desktop's right-click. Held on the row's own
+// pointerdown rather than a library gesture: a plain timer that's disarmed
+// by any subsequent pointerup/pointermove/pointercancel/pointerleave, so a
+// scroll or a normal tap never triggers it, only a genuine sustained press.
+const LONG_PRESS_MS = 500;
+const LONG_PRESS_MOVE_TOLERANCE = 10; // px of finger drift still counted as "held still"
+function attachLongPressContextMenu(row, item) {
+  let timer = null;
+  let startX = 0, startY = 0;
+  let firedMenu = false;
+
+  function clear() {
+    clearTimeout(timer);
+    timer = null;
+  }
+  row.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse') return; // native contextmenu handles mouse
+    if (window.mobileSelectModeActive) return; // taps toggle selection instead, see handleRowClickMobileAware
+    startX = e.clientX;
+    startY = e.clientY;
+    firedMenu = false;
+    clear();
+    timer = setTimeout(() => {
+      firedMenu = true;
+      if (navigator.vibrate) navigator.vibrate(15);
+      if (selectedItems.has(item.path) && selectedItems.size > 1) {
+        showMultiContextMenu(startX, startY, Array.from(selectedItems.values()));
+      } else {
+        selectOnly(item);
+        showContextMenu(startX, startY, item);
+      }
+    }, LONG_PRESS_MS);
+  });
+  row.addEventListener('pointermove', (e) => {
+    if (!timer) return;
+    if (Math.abs(e.clientX - startX) > LONG_PRESS_MOVE_TOLERANCE || Math.abs(e.clientY - startY) > LONG_PRESS_MOVE_TOLERANCE) clear();
+  });
+  row.addEventListener('pointerup', clear);
+  row.addEventListener('pointercancel', clear);
+  row.addEventListener('pointerleave', clear);
+  // The long-press's own trailing click (browsers still fire one on
+  // pointerup) would otherwise also play/open the row right after the menu
+  // pops up over it — swallow just that one click in the capture phase.
+  row.addEventListener('click', (e) => {
+    if (firedMenu) {
+      e.stopPropagation();
+      e.preventDefault();
+      firedMenu = false;
+    }
+  }, { capture: true });
+}
+
 function buildFileRow(item, opts = {}) {
   const row = document.createElement('div');
   row.className = 'file-row';
@@ -72,12 +125,25 @@ function buildFileRow(item, opts = {}) {
     });
     row.addEventListener('click', (e) => handleRowClickMobileAware(e, item, () => browse(item.path)));
   } else {
+    // Mobile-only alternate row content (see .mobile-row-view-meta in
+    // responsive.css): a title+artist+album block laid out exactly like a
+    // queue row (.row-title/.row-subtitle from sidebar-queue-playlists.css),
+    // toggled via the topbar button instead of the plain filename. Built
+    // unconditionally for every audio row (cheap markup) and shown/hidden
+    // purely with CSS so switching the toggle never needs a re-render.
+    const mobileMetaRowHtml = item.isAudio ? `
+      <div class="file-name-wrap-meta">
+        <div class="row-title">${item.name}</div>
+        <div class="row-subtitle"></div>
+      </div>
+    ` : '';
     row.innerHTML = `
       <span class="file-track">${item.track || ''}</span>
       <span class="file-icon">${item.isAudio ? '🎵' : '📄'}</span>
       <div class="file-name-wrap">
         <div class="file-name">${item.name}</div>
       </div>
+      ${mobileMetaRowHtml}
       <span class="file-title"><span class="cell-text"></span></span>
       <span class="file-artist"><span class="cell-text"></span></span>
       <span class="file-album"><span class="cell-text"></span></span>
@@ -92,11 +158,15 @@ function buildFileRow(item, opts = {}) {
       const artistSpan = row.querySelector('.file-artist .cell-text');
       const albumSpan = row.querySelector('.file-album .cell-text');
       const durationSpan = row.querySelector('.file-duration .cell-text');
+      const mobileTitleSpan = row.querySelector('.file-name-wrap-meta .row-title');
+      const mobileSubtitleSpan = row.querySelector('.file-name-wrap-meta .row-subtitle');
       getMeta(item.path).then(meta => {
         titleSpan.textContent = meta.title || '';
         artistSpan.textContent = meta.artist || '';
         albumSpan.textContent = meta.album || '';
         durationSpan.textContent = formatDuration(meta.duration);
+        if (mobileTitleSpan) mobileTitleSpan.textContent = meta.title || item.name;
+        if (mobileSubtitleSpan) mobileSubtitleSpan.textContent = [meta.artist, meta.album].filter(Boolean).join(' • ');
         if (meta.artist) {
           artistSpan.classList.add('link-cell');
           artistSpan.addEventListener('click', (e) => {
@@ -151,6 +221,15 @@ function buildFileRow(item, opts = {}) {
       showContextMenu(e.clientX, e.clientY, item);
     }
   });
+  // Mobile: long-pressing a row opens the same options menu as tapping its
+  // 3-dot button (row-menu-btn) or, on desktop, right-clicking it. Touch
+  // has no native contextmenu equivalent, so this is a manual timer on
+  // pointerdown, cancelled on any pointerup/move/leave before it fires.
+  // Scoped to touch/pen pointers only — mouse already gets the native
+  // 'contextmenu' handler above, and select mode's own tap-to-toggle
+  // behavior (handleRowClickMobileAware) is left untouched, since a menu
+  // popup mid-selection would be more disruptive than useful there.
+  attachLongPressContextMenu(row, item);
   // Mobile-only 3-dot button: only ever visible when select mode is off
   // (see responsive.css), which per the app's select-mode design also
   // guarantees selectedItems is empty at that point — so this always acts

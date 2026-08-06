@@ -58,7 +58,7 @@ const MARQUEE_TARGETS = [
   ['.file-title .cell-text, .file-artist .cell-text, .file-album .cell-text', false],
   ['.meta-field-dropdown-item', true],
   ['.upload-item-name', true],
-  ['.queue-item .row-title, .playlist-item .row-title, .queue-item .row-subtitle, .playlist-item .row-subtitle', true],
+  ['.queue-item .row-title, .playlist-item .row-title, .queue-item .row-subtitle, .playlist-item .row-subtitle, .file-name-wrap-meta .row-title, .file-name-wrap-meta .row-subtitle', true],
   ['.playlist-name', true],
   ['.mini-player-title', true],
   ['.fp-title', true],
@@ -518,7 +518,9 @@ bottomNav.querySelectorAll('.bottom-nav-btn').forEach(btn => {
     setMobileTab(tab);
   });
 });
-document.getElementById('sidebarCloseBtn').addEventListener('click', () => setMobileTab('files'));
+// sidebarCloseBtn was removed: it duplicated the bottom nav's Files button
+// (both just called setMobileTab('files')), so tapping Files there is now
+// the only way back, same as it already was for Queue/Playlists.
 setMobileTab('files');
 
 // Keep .app's has-player class in sync with the player bar's own visibility
@@ -1516,10 +1518,35 @@ window.exitMobileSelectMode = function exitMobileSelectMode() {
 };
 
 mobileSelectBtn.addEventListener('click', enterMobileSelectMode);
+
+// ---------- Mobile file row view toggle (filename vs title/artist/album) ----------
+// Purely a CSS class flip on .app, persisted in settings.mobileFileRowView —
+// existing rows already render both blocks (see buildFileRow in
+// filelist.js), so toggling never needs a re-render, just which one is
+// visible (see responsive.css .mobile-row-view-meta).
+const mobileRowViewBtn = document.getElementById('mobileRowViewBtn');
+function applyMobileRowViewSetting() {
+  appEl.classList.toggle('mobile-row-view-meta', settings.mobileFileRowView === 'meta');
+  mobileRowViewBtn.classList.toggle('active-state', settings.mobileFileRowView === 'meta');
+}
+applyMobileRowViewSetting();
+mobileRowViewBtn.addEventListener('click', () => {
+  settings.mobileFileRowView = settings.mobileFileRowView === 'meta' ? 'name' : 'meta';
+  saveSettings();
+  applyMobileRowViewSetting();
+  scanMarquees();
+});
 // OK both ends select mode AND unselects all (clearing the .selected
-// highlight on every row) — clearSelection() does the unselecting and
-// (via the hook it calls into above) exiting select mode both in one call.
-mobileSelectOkBtn.addEventListener('click', () => clearSelection());
+// highlight on every row). clearSelection() does the unselecting and (via
+// the hook it calls into) exiting select mode — but it early-returns as a
+// no-op when nothing is selected yet (see selection.js), which is right
+// for its other callers but meant OK silently did nothing if tapped before
+// selecting anything. exitMobileSelectMode() is called directly here too,
+// so OK always exits regardless of that guard.
+mobileSelectOkBtn.addEventListener('click', () => {
+  clearSelection();
+  window.exitMobileSelectMode();
+});
 
 mobileSelectEditBtn.addEventListener('click', (e) => {
   e.stopPropagation();

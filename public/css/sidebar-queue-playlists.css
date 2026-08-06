@@ -34,18 +34,6 @@
   flex-shrink: 0;
 }
 .sidebar-tabs { display: flex; border-bottom: 1px solid #2a2a2e; align-items: stretch; }
-.sidebar-close-btn {
-  display: none;
-  align-items: center;
-  justify-content: center;
-  width: 44px;
-  flex-shrink: 0;
-  background: none;
-  border: none;
-  color: #a8a8ae;
-  cursor: pointer;
-}
-@media (hover: hover) { .sidebar-close-btn:hover { color: #e8e8ea; } }
 .queue-toolbar {
   display: flex; gap: 8px; padding: 8px; border-bottom: 1px solid #2a2a2e;
 }

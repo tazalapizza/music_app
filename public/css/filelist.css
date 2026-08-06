@@ -154,7 +154,8 @@
 @media (hover: hover) { .link-cell:hover { text-decoration: underline; } }
 .pb-link { cursor: pointer; }
 @media (hover: hover) { .pb-link:hover { text-decoration: underline; } }
-.crumb-current { color: #e8e8ea; font-weight: 600; }
+/* .crumb-current lives in topbar.css alongside the rest of the breadcrumb
+   styling. */
 
 .file-list-header {
   display: grid;

@@ -30,18 +30,24 @@
 .bottom-nav,
 .mini-player,
 .full-player,
-.sidebar-close-btn,
 .btn-icon-mobile,
 .settings-row-auth-mobile,
 .search-lens-icon,
 .mobile-select-mode-group,
-.row-menu-btn {
+.row-menu-btn,
+.file-name-wrap-meta {
   display: none;
 }
 /* Belt-and-suspenders: this button also carries .btn-icon-mobile (already
    hidden above), but give it its own unconditional rule too so its
    desktop-hidden state doesn't depend on that shared class alone. */
 #mobileSelectBtn { display: none; }
+/* Same reasoning as #mobileSelectBtn above: .btn-icon-mobile is on the
+   <button> itself here (not just an inner icon), so topbar.css's
+   ".topbar-actions button" element-selector rule (higher specificity than
+   the bare .btn-icon-mobile class) was winning and keeping it visible on
+   desktop. */
+#mobileRowViewBtn { display: none; }
 
 /* =========================================================================
    2. Touch-specific tweaks (not tied to screen width)
@@ -66,6 +72,12 @@
      (separate handler). */
   .folder-icon-default { display: none; }
   .folder-icon-play-btn { opacity: 1; font-size: 15px; }
+}
+
+@media (max-width: 780px) {
+  /* .crumb-play-btn svg's size is set once in topbar.css and applies the
+     same on mobile - only the tap target needs widening here for touch. */
+  .crumb-play-btn { width: 28px; height: 28px; }
 }
 
 /* =========================================================================
@@ -209,11 +221,12 @@
   }
   .app.mobile-tab-queue .sidebar,
   .app.mobile-tab-playlists .sidebar { display: flex; }
-  /* Inside the sidebar overlay, only the matching panel + toolbar shows;
-     the sidebar's own Queue/Playlists tab strip is redundant with the
-     bottom nav, so it's replaced by a single back arrow. */
-  .sidebar-tabs .tab-btn { display: none; }
-  .sidebar-close-btn { display: flex; }
+  /* The sidebar's own Queue/Playlists tab strip is redundant with the
+     bottom nav (which switches between them directly via setMobileTab in
+     layout-init.js), so it stays hidden here; getting back to Files is
+     also just the bottom nav's Files button now (sidebarCloseBtn was
+     removed as a duplicate of that same action). */
+  .sidebar-tabs { display: none; }
   .sidebar-resize-handle { display: none; }
 
   /* Reserve room at the bottom of both panes for the bottom nav (and the
@@ -292,6 +305,31 @@
   .file-art { width: 36px; height: 36px; }
   .row-open-folder-btn { display: none; }
 
+  /* ----- Row view toggle: filename vs title+artist+album -----
+     Both blocks are always in the DOM (see buildFileRow in filelist.js).
+     .file-name-wrap-meta is display:none by default everywhere (see the
+     unconditional mobile-only-elements block at the top of this file) so
+     desktop's fixed grid-template-columns never sees it as an extra cell;
+     this rule re-enables it only on mobile, and only once the topbar
+     toggle button (see layout-init.js) has switched .app into meta view.
+     Folder rows never get a .file-name-wrap-meta sibling (see buildFileRow
+     - it's only built for item.isAudio), so the toggle must not hide their
+     .file-name-wrap (name + song/folder counts, their only name display)
+     or folders would go blank. Scoped to .file-row:not([data-isdir="true"])
+     so only audio rows are affected. */
+  .app.mobile-row-view-meta .file-row:not([data-isdir="true"]) .file-name-wrap { display: none; }
+  .app.mobile-row-view-meta .file-name-wrap-meta {
+    display: block;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+  }
+  /* Reuses the exact same title/subtitle look as queue rows
+     (.row-title/.row-subtitle, defined in sidebar-queue-playlists.css) so
+     the two views read as visually identical. */
+
+  .mobile-row-view-toggle-btn.active-state { color: var(--accent-color); }
+
   /* Row menu button (3 dots): the mobile row's only extra control, hidden
      entirely while select mode is active (rows themselves become the tap
      target for selection then — see handleRowClickMobileAware in
@@ -337,6 +375,7 @@
   #mobileSelectBtn.mobile-select-toggle-btn.hidden { display: none !important; }
   #mobileSelectModeGroup.mobile-select-mode-group.hidden { display: none !important; }
   #mobileSelectBtn.mobile-select-toggle-btn { display: inline-flex !important; font-size: 13px; width: auto !important; padding: 0 10px !important; }
+  #mobileRowViewBtn.mobile-row-view-toggle-btn { display: inline-flex !important; }
   .mobile-select-mode-group {
     display: flex;
     align-items: center;

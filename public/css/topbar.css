@@ -22,7 +22,7 @@
   flex-shrink: 0;
 }
 .path-breadcrumb {
-  font-size: 14px;
+  font-size: 13px;
   color: #a8a8ae;
   overflow-x: auto;
   overflow-y: hidden;
@@ -32,7 +32,75 @@
   align-items: center;
   flex-shrink: 1;
   min-width: 0;
+  /* Hide the scrollbar itself (still scrollable via touch/wheel/drag) so a
+     long, deep path doesn't grow a visible horizontal scrollbar under the
+     pill trail — the fade mask below already signals overflow instead. */
+  scrollbar-width: none;
+  /* Fades the trail's leading edge to a soft edge rather than a hard clip
+     when it overflows and has been scrolled, echoing the rounded/soft
+     language of the pills themselves instead of a plain cut-off. */
+  mask-image: linear-gradient(to right, transparent 0, black 12px, black calc(100% - 12px), transparent 100%);
 }
+.path-breadcrumb::-webkit-scrollbar { display: none; }
+.crumb-item { display: inline-flex; align-items: center; gap: 2px; flex-shrink: 0; }
+.crumb-sep {
+  color: #4a4a50;
+  margin: 0 2px;
+  flex-shrink: 0;
+}
+.crumb-label {
+  cursor: pointer;
+  color: #a8a8ae;
+  padding: 4px 9px;
+  border-radius: 6px;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+@media (hover: hover) {
+  .crumb-label:hover { background: #232326; color: #e8e8ea; }
+}
+/* The last crumb (current folder) reads as the destination, not a link:
+   a filled pill in the app's accent, matching how .search-scope-btn.active
+   and other "this is the active state" chips already look elsewhere in the
+   topbar, rather than the plain underline links every other crumb uses. */
+.crumb-item-current .crumb-label {
+  background: color-mix(in srgb, var(--accent-color) 16%, transparent);
+  color: color-mix(in srgb, var(--accent-color) 82%, white);
+  font-weight: 600;
+  cursor: default;
+}
+@media (hover: hover) {
+  .crumb-item-current .crumb-label:hover { background: color-mix(in srgb, var(--accent-color) 16%, transparent); }
+}
+.crumb-current {
+  color: color-mix(in srgb, var(--accent-color) 82%, white);
+  font-weight: 600;
+  padding: 4px 9px;
+}
+.crumb-play-btn {
+  background: none;
+  border: none;
+  color: color-mix(in srgb, var(--accent-color) 82%, white);
+  cursor: pointer;
+  opacity: 0.75;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-left: 1px;
+  border-radius: 5px;
+  flex-shrink: 0;
+}
+/* SVG width/height HTML attributes are presentation attributes - Chrome
+   treats them as the lowest-priority CSS declarations, so any stylesheet
+   rule (even a generic one elsewhere) can silently override them. Sizing
+   it here in CSS instead removes that ambiguity - this is the one place
+   controlling this SVG's size. viewBox="6 4 14 16" (browse.js) is the
+   polygon's exact bounding box with no padding, so the 11.375x13 here
+   (matching that 14:16 ratio) makes the polygon fill this box exactly,
+   with no preserveAspectRatio letterboxing on either axis. */
+.crumb-play-btn svg { width: 11.375px; height: 13px; }
+@media (hover: hover) { .crumb-play-btn:hover { opacity: 1; background: color-mix(in srgb, var(--accent-color) 22%, transparent); } }
 .search-wrap {
   position: relative;
   display: flex;
@@ -77,25 +145,6 @@
   border-color: var(--accent-color);
   color: #12121e;
 }
-.crumb-item { display: inline-flex; align-items: center; gap: 4px; }
-.crumb-sep { color: #77777d; margin: 0 2px; }
-.crumb-label {
-  cursor: pointer;
-  color: var(--accent-color);
-}
-@media (hover: hover) { .crumb-label:hover { text-decoration: underline; } }
-.crumb-play-btn {
-  background: none;
-  border: none;
-  color: #e8e8ea;
-  font-size: 11px;
-  cursor: pointer;
-  opacity: 0.7;
-  padding: 2px 4px;
-  border-radius: 4px;
-  line-height: 1;
-}
-@media (hover: hover) { .crumb-play-btn:hover { opacity: 1; background: #2a2a2e; } }
 .topbar-actions {
   display: flex;
   align-items: center;

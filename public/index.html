@@ -82,6 +82,12 @@
         <!-- Mobile-only: toggles select mode for the file list (see
              responsive.css/layout-init.js). Hidden on desktop, where
              multi-select is already ctrl/shift-click on rows directly. -->
+        <!-- Mobile-only: switches file rows between filename display and
+             title+artist+album display (same look as queue rows). State is
+             persisted in settings.mobileFileRowView (see state.js/filelist.js). -->
+        <button id="mobileRowViewBtn" class="btn-icon-mobile mobile-row-view-toggle-btn" title="Toggle row info">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
+        </button>
         <button id="mobileSelectBtn" class="btn-icon-mobile mobile-select-toggle-btn" title="Select items">Select</button>
         <div id="mobileSelectModeGroup" class="mobile-select-mode-group hidden">
           <button id="mobileSelectOkBtn" title="Done selecting">OK</button>
@@ -133,9 +139,6 @@
 
       <aside class="sidebar" id="sidebar">
         <div class="sidebar-tabs">
-          <button class="sidebar-close-btn" id="sidebarCloseBtn" title="Back to files">
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
-          </button>
           <button class="tab-btn active" data-tab="queue">Queue</button>
           <button class="tab-btn" data-tab="playlists">Playlists</button>
         </div>

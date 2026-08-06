@@ -74,10 +74,11 @@ async function openLibrary(type, name, opts = {}) {
 }
 
 function renderLibraryBreadcrumb(type, name) {
+  const sep = '<svg class="crumb-sep" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-chevron-right"></use></svg>';
   breadcrumb.innerHTML = `
     <span class="crumb-item"><span class="crumb-label" data-path="">Home</span></span>
-    <span class="crumb-sep"> / </span>
-    <span class="crumb-item"><span class="crumb-current">${type === 'artist' ? 'Artist' : 'Album'}: ${name}</span></span>
+    ${sep}
+    <span class="crumb-item crumb-item-current"><span class="crumb-current">${type === 'artist' ? 'Artist' : 'Album'}: ${name}</span></span>
   `;
   breadcrumb.querySelector('.crumb-label').addEventListener('click', () => browse(''));
 }
@@ -155,11 +156,12 @@ function renderBreadcrumb(relPath) {
     acc = acc ? acc + '/' + part : part;
     crumbs.push({ path: acc, label: part });
   }
+  const sep = '<svg class="crumb-sep" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-chevron-right"></use></svg>';
   breadcrumb.innerHTML = crumbs.map((c, i) => `
-    ${i > 0 ? '<span class="crumb-sep"> / </span>' : ''}
-    <span class="crumb-item">
+    ${i > 0 ? sep : ''}
+    <span class="crumb-item${i === crumbs.length - 1 ? ' crumb-item-current' : ''}">
       <span class="crumb-label" data-path="${c.path}">${c.label}</span>
-      ${i === crumbs.length - 1 ? `<button class="crumb-play-btn" data-path="${c.path}" title="Play this folder">▶</button>` : ''}
+      ${i === crumbs.length - 1 ? `<button class="crumb-play-btn" data-path="${c.path}" title="Play this folder"><svg viewBox="6 4 14 16" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"></polygon></svg></button>` : ''}
     </span>
   `).join('');
   breadcrumb.querySelectorAll('.crumb-label').forEach(el => {
