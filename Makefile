@@ -12,11 +12,22 @@
 #   make ios              # open project in Xcode (macOS only)
 #   make build-apk        # build a debug APK from the command line
 #   make run-ios           # build + run on a connected iPhone or simulator (macOS only)
+#   make emulator-create    # download an Android system image + create a test AVD (no Mac needed)
+#   make emulator-run        # boot the AVD (leave running in its own terminal)
+#   make emulator-list        # list AVDs on this machine
+#   make emulator-delete       # remove the AVD (e.g. to recreate with different settings)
 #   make all             # setup + init in one go
 #   make clean            # remove native platforms + node_modules
 #
 # Re-run `make setup` any time on a fresh machine to fully redeploy the
 # toolchain — it is idempotent (safe to run multiple times).
+#
+# TESTING WITHOUT A MAC: you don't need iOS/Xcode to test this app - Android
+# + the emulator targets above work fully on Linux/Windows, no Mac required.
+# Typical flow: `make init` (creates android/), `make emulator-create` (one-
+# time download + AVD setup), `make emulator-run` in one terminal, then in
+# another terminal `npx cap run android` (or `make android` to use Android
+# Studio's Run button instead) to install the app onto the running emulator.
 #
 # NOTE ON iOS: Xcode only runs on macOS. This Makefile detects the host OS:
 #   - On macOS: installs Xcode Command Line Tools, CocoaPods, and the iOS
@@ -37,10 +48,15 @@ WEB_DIR      ?= public
 ANDROID_SDK_ROOT ?= $(HOME)/android-sdk
 CMDLINE_TOOLS_VERSION ?= 11076708
 NODE_MIN_MAJOR := 22
+AVD_NAME       ?= Vibing_Test
+AVD_API_LEVEL  ?= 34
+AVD_SYSTEM_IMAGE ?= system-images;android-$(AVD_API_LEVEL);google_apis;x86_64
+AVD_DEVICE     ?= pixel_7
 
 # ---- Phony targets --------------------------------------------------------
 .PHONY: all setup npm-deps system-deps java-deps android-sdk cap-packages \
-        ios-deps init sync android ios build-apk run-ios clean doctor dev-env
+        ios-deps init sync android ios build-apk run-ios clean doctor dev-env \
+        emulator-deps emulator-create emulator-run emulator-list emulator-delete
 
 all: setup init
 
@@ -123,6 +139,71 @@ android-sdk:
 		  echo 'export ANDROID_HOME=$(ANDROID_SDK_ROOT)' >> $(HOME)/.bashrc; \
 		  echo 'export PATH=$$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$$ANDROID_SDK_ROOT/platform-tools:$$PATH' >> $(HOME)/.bashrc; \
 		  echo ">> Appended Android env vars to ~/.bashrc" )
+
+# ---------------------------------------------------------------------------
+# Android EMULATOR (AVD) — lets you run/test the app with no physical device
+# and no Mac (this is the recommended path for you since you don't have a
+# Mac for iOS — Android + emulator works fully on Linux/Windows/macOS).
+#
+# Kept separate from android-sdk/setup rather than bundled in automatically:
+# the emulator package + a system image is a large download (1-2GB+) that
+# not everyone building this project wants pulled in by default.
+#
+# x86_64 image is used unconditionally (not arm64) because this is intended
+# for a Linux or Intel-based dev machine; only Apple Silicon Macs would
+# need arm64-v8a instead, which doesn't apply to your setup.
+# ---------------------------------------------------------------------------
+emulator-deps: android-sdk
+	@echo ">> Installing Android Emulator + system image ($(AVD_SYSTEM_IMAGE))..."
+	@export PATH="$(ANDROID_SDK_ROOT)/cmdline-tools/latest/bin:$(ANDROID_SDK_ROOT)/platform-tools:$(ANDROID_SDK_ROOT)/emulator:$$PATH"; \
+	yes | sdkmanager --sdk_root="$(ANDROID_SDK_ROOT)" --licenses >/dev/null 2>&1 || true; \
+	sdkmanager --sdk_root="$(ANDROID_SDK_ROOT)" \
+		"emulator" \
+		"platforms;android-$(AVD_API_LEVEL)" \
+		"$(AVD_SYSTEM_IMAGE)"
+	@echo ">> Emulator + system image installed."
+
+# Creates the AVD if it doesn't already exist (idempotent - re-running
+# 'make emulator-create' is safe and just skips creation on subsequent
+# runs). `echo "no" |` answers the interactive "create a custom hardware
+# profile?" prompt avdmanager asks, so this works non-interactively.
+emulator-create: emulator-deps
+	@export PATH="$(ANDROID_SDK_ROOT)/cmdline-tools/latest/bin:$(ANDROID_SDK_ROOT)/platform-tools:$(ANDROID_SDK_ROOT)/emulator:$$PATH"; \
+	if avdmanager list avd | grep -q "Name: $(AVD_NAME)$$"; then \
+		echo ">> AVD '$(AVD_NAME)' already exists, skipping creation."; \
+	else \
+		echo ">> Creating AVD '$(AVD_NAME)' ($(AVD_SYSTEM_IMAGE), device: $(AVD_DEVICE))..."; \
+		echo "no" | avdmanager create avd \
+			--name "$(AVD_NAME)" \
+			--package "$(AVD_SYSTEM_IMAGE)" \
+			--device "$(AVD_DEVICE)" \
+			--force; \
+	fi
+	@echo ""
+	@echo "✅  AVD ready. Run 'make emulator-run' to start it, or 'make emulator-list'"
+	@echo "    to see all AVDs on this machine."
+	@echo ""
+
+# Boots the emulator window. Leave this running in one terminal, then in
+# another terminal run 'npx cap run android' (or open Android Studio and
+# hit Run) to install/launch the app onto it - same as a physical device,
+# just virtual. First boot is noticeably slower (cold boot) than later ones.
+emulator-run:
+	@export PATH="$(ANDROID_SDK_ROOT)/cmdline-tools/latest/bin:$(ANDROID_SDK_ROOT)/platform-tools:$(ANDROID_SDK_ROOT)/emulator:$$PATH"; \
+	if ! avdmanager list avd | grep -q "Name: $(AVD_NAME)$$"; then \
+		echo "!! AVD '$(AVD_NAME)' doesn't exist yet. Run 'make emulator-create' first."; \
+		exit 1; \
+	fi; \
+	emulator -avd "$(AVD_NAME)"
+
+emulator-list:
+	@export PATH="$(ANDROID_SDK_ROOT)/cmdline-tools/latest/bin:$(ANDROID_SDK_ROOT)/platform-tools:$(ANDROID_SDK_ROOT)/emulator:$$PATH"; \
+	avdmanager list avd
+
+emulator-delete:
+	@export PATH="$(ANDROID_SDK_ROOT)/cmdline-tools/latest/bin:$(ANDROID_SDK_ROOT)/platform-tools:$(ANDROID_SDK_ROOT)/emulator:$$PATH"; \
+	avdmanager delete avd --name "$(AVD_NAME)"
+	@echo ">> Deleted AVD '$(AVD_NAME)'."
 
 # ---------------------------------------------------------------------------
 # iOS toolchain (macOS only): Xcode CLT + CocoaPods
@@ -276,6 +357,66 @@ build-apk: sync
 	cd android && ./gradlew assembleDebug
 	@echo ""
 	@echo "✅  APK built: android/app/build/outputs/apk/debug/app-debug.apk"
+
+# ---------------------------------------------------------------------------
+# Android emulator, no Android Studio GUI or Mac needed.
+# AVD_NAME/AVD_DEVICE/AVD_SYSIMG are overridable, e.g.:
+#   make avd-create AVD_NAME=pixel6
+# ---------------------------------------------------------------------------
+AVD_NAME     ?= vibing-test
+AVD_DEVICE   ?= pixel_6
+AVD_SYSIMG   ?= system-images;android-34;google_apis;x86_64
+
+avd-create:
+	@export PATH="$(ANDROID_SDK_ROOT)/cmdline-tools/latest/bin:$(ANDROID_SDK_ROOT)/platform-tools:$(ANDROID_SDK_ROOT)/emulator:$$PATH"; \
+	if avdmanager list avd | grep -q "Name: $(AVD_NAME)$$"; then \
+		echo ">> AVD '$(AVD_NAME)' already exists, skipping creation."; \
+	else \
+		echo ">> Installing system image $(AVD_SYSIMG)..."; \
+		yes | sdkmanager --sdk_root="$(ANDROID_SDK_ROOT)" "$(AVD_SYSIMG)"; \
+		echo ">> Creating AVD '$(AVD_NAME)'..."; \
+		echo "no" | avdmanager create avd -n "$(AVD_NAME)" -k "$(AVD_SYSIMG)" -d "$(AVD_DEVICE)"; \
+	fi
+
+# Launches the emulator in the background and waits until it's fully booted
+# and ready to receive an install. Safe to re-run - if an emulator/device is
+# already connected, this just proceeds straight to the boot-wait check.
+avd-start:
+	@export PATH="$(ANDROID_SDK_ROOT)/cmdline-tools/latest/bin:$(ANDROID_SDK_ROOT)/platform-tools:$(ANDROID_SDK_ROOT)/emulator:$$PATH"; \
+	if adb devices | grep -q "device$$"; then \
+		echo ">> A device/emulator is already connected, skipping launch."; \
+	else \
+		echo ">> Starting emulator '$(AVD_NAME)' in the background..."; \
+		nohup emulator -avd "$(AVD_NAME)" -no-snapshot-load > /tmp/emulator.log 2>&1 & \
+		echo ">> Waiting for boot to complete (this can take a minute or two the first time)..."; \
+		adb wait-for-device; \
+		BOOTED=""; \
+		for i in $$(seq 1 60); do \
+			BOOTED=$$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r'); \
+			if [ "$$BOOTED" = "1" ]; then break; fi; \
+			sleep 5; \
+		done; \
+		if [ "$$BOOTED" = "1" ]; then echo "✅  Emulator booted."; \
+		else echo "!! Emulator did not report boot-complete in time — check /tmp/emulator.log"; fi; \
+	fi
+
+# One-shot: build the debug APK and install+launch it on whatever emulator
+# or physical device is currently connected (starting the emulator first if
+# nothing is connected yet). This is the Android equivalent of 'make run-ios'.
+run-android: avd-start build-apk
+	@export PATH="$(ANDROID_SDK_ROOT)/cmdline-tools/latest/bin:$(ANDROID_SDK_ROOT)/platform-tools:$$PATH"; \
+	APK=android/app/build/outputs/apk/debug/app-debug.apk; \
+	echo ">> Installing $$APK..."; \
+	adb install -r "$$APK"; \
+	PKG=$$(grep -m1 'applicationId' android/app/build.gradle | sed -E 's/.*"(.*)".*/\1/'); \
+	if [ -z "$$PKG" ]; then PKG="$(APP_ID)"; fi; \
+	echo ">> Launching $$PKG..."; \
+	adb shell monkey -p "$$PKG" -c android.intent.category.LAUNCHER 1 >/dev/null; \
+	echo "✅  App installed and launched on the connected device/emulator."
+
+avd-stop:
+	@export PATH="$(ANDROID_SDK_ROOT)/platform-tools:$$PATH"; \
+	adb -s $$(adb devices | awk '/emulator/{print $$1; exit}') emu kill 2>/dev/null || echo ">> No running emulator found."
 
 # ---------------------------------------------------------------------------
 # Build + run on a connected iPhone (or simulator) via CLI, macOS only.
