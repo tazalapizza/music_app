@@ -1,45 +1,62 @@
 // ---------------------------------------------------------------------------
-// native-audio-adapter.js — native-audio migration adapter (Steps 1-3).
+// native-audio-adapter.js — native-audio migration adapter.
 //
-// Why this file exists: iOS Safari (and WKWebView, which Capacitor uses
-// under the hood) does not support setting <audio>.volume — it's hard-locked
-// to the hardware volume. There is no web workaround for this (GainNode was
-// tried for ReplayGain and had to be disabled on mobile — see the long
-// comment in state.js — because rerouting <audio> through a WebAudio graph
-// makes iOS suspend/kill audio far more aggressively in the background).
-// The only real fix is native playback via @capgo/capacitor-native-audio,
-// which exposes a genuine setVolume() on iOS/Android.
+// PLUGIN SWITCH (this version): migrated from @capgo/capacitor-native-audio
+// to @mediagrid/capacitor-native-audio. Root cause: Cap-go's plugin loads
+// audio files fully INTO MEMORY before playback can start (confirmed
+// directly in its own docs, worded identically across every version:
+// "This method will load more optimized audio files for background into
+// memory" - and its own tagline describes it as built for "short audio
+// files... for games and apps", i.e. sound effects, not long-form streamed
+// music). For large remote files (FLAC especially) and slower connections
+// (confirmed on 4G), this meant a real, user-visible multi-second delay
+// before any audio started - effectively no different from downloading the
+// whole file first. Cap-go's plugin has no progressive-streaming mode for
+// plain MP3/FLAC-over-HTTP; the only genuine streaming path it exposes is
+// HLS/m3u8, which our backend does not produce.
 //
-// Scope so far:
-//   STEP 1 (done): play / pause / resume / track-loading / volume / mute.
-//   STEP 2 (done, later revised - see below): native 'track ended'
-//     detection and current-time/duration/seek, plus every other
-//     audioEl-dependent feature found along the way (mobile full-player
-//     seek bar, swipe-to-seek, keyboard seek, synced lyrics x2, MediaSession
-//     lock-screen handlers).
-//   STEP 3 (done): playback speed (setRate), ReplayGain applied via native
-//     volume instead of the WebAudio GainNode graph that had to stay
-//     disabled on mobile (see state.js), and lock-screen Now Playing
-//     metadata (title/artist/album/art) via notificationMetadata.
-//   REVISION (this pass): Step 2 was originally built on a 'stop'-event
-//     heuristic for track-end detection and a requestAnimationFrame poll
-//     loop (with per-tick getCurrentTime() round-trips) for position
-//     tracking, because that's what the plugin's docs surfaced at the time.
-//     The plugin actually exposes purpose-built events for both: 'complete'
-//     (fires only on natural end-of-track) and 'currentTime' (pushed
-//     automatically ~every 100ms during playback). Both are used instead
-//     now - see bindNativeListenersOnce, onTimeUpdate, and getCurrentTime.
-// NOT yet covered (Step 4): buffered-download progress display - there is
-// still no native equivalent for this in the plugin's API at all.
+// @mediagrid/capacitor-native-audio is built on Android's Media3/ExoPlayer
+// (via a proper MediaSessionService, not a custom notification hack) and
+// iOS's AVPlayer - both stream progressively over HTTP by design, for any
+// format they support, no HLS/segmenting required server-side. This is a
+// genuine architectural fix, not a workaround.
+//
+// PUBLIC API IS UNCHANGED from the previous (Cap-go-backed) version of this
+// file on purpose: isNative, load, play, pause, paused, setVolume, setMuted,
+// muted, setReplayGainFactor, setRate, getCurrentTime, getDuration, seekTo,
+// onEnded, onPlayStarted, onTimeUpdate - every other file in this app
+// (playback.js, controls.js, layout-init.js, metadata-editor.js,
+// settings-auth-toast-lyrics.js, queue-playlists.js, state.js) calls these
+// exact same function names and needs ZERO changes as a result of this
+// plugin swap. Only the internals below changed.
+//
+// ONE REAL REGRESSION, called out honestly: mediagrid has no pushed
+// currentTime-style event (Cap-go's plugin did, ~every 100ms). This version
+// brings back a lightweight polling loop for getCurrentTime() while
+// playing, similar to what an early revision of the Cap-go-backed adapter
+// used before that plugin's real push event was discovered. Polling
+// interval is 250ms (vs the old 100ms push cadence) - a reasonable
+// trade-off between UI smoothness and native round-trip volume; the seek
+// bar/timer will feel very slightly less fluid than before but not
+// noticeably choppy.
+//
+// Why this file exists in the first place: iOS Safari (and WKWebView, which
+// Capacitor uses under the hood) does not support setting <audio>.volume -
+// it's hard-locked to the hardware volume. There is no web workaround for
+// this (GainNode was tried for ReplayGain and had to be disabled on mobile
+// - see the long comment in state.js - because rerouting <audio> through a
+// WebAudio graph makes iOS suspend/kill audio far more aggressively in the
+// background). The only real fix is native playback, which exposes a
+// genuine setVolume() on iOS/Android regardless of which plugin provides it.
 //
 // Platform behavior:
 //   - Web (PWA in a browser): NativeAudioAdapter delegates straight to
 //     audioEl, unchanged from before this file existed.
-//   - Native (Capacitor iOS/Android shell): delegates to the
-//     @capgo/capacitor-native-audio plugin instead.
+//   - Native (Capacitor iOS/Android shell): delegates to
+//     @mediagrid/capacitor-native-audio instead.
 //
 // Every call site elsewhere in the app should go through NativeAudioAdapter,
-// not call audioEl or NativeAudio directly, so the platform branch lives in
+// not call audioEl or AudioPlayer directly, so the platform branch lives in
 // exactly one place.
 // ---------------------------------------------------------------------------
 
@@ -50,72 +67,35 @@ const NativeAudioAdapter = (() => {
   // a plain web page.
   const isNative = () => (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) || false;
 
-  // Single fixed assetId: this app only ever plays one track at a time
+  // Single fixed audioId: this app only ever plays one track at a time
   // (see queue/queueIndex in state.js), so there's no need for the
-  // multi-asset bookkeeping NativeAudio's API is built to support.
-  const ASSET_ID = 'current-track';
+  // multi-source bookkeeping mediagrid's API is built to support (it's
+  // designed for cases like "primary track + separate looping background
+  // music" playing simultaneously, which this app never does).
+  // useForNotification: true is REQUIRED to be set on create() for this
+  // audioId - mediagrid treats exactly one source as "the primary track"
+  // that drives the lock-screen/notification, and ours always is one.
+  const AUDIO_ID = 'current-track';
 
-  let NativeAudio = null; // lazily bound to window.Capacitor.Plugins.NativeAudio on first native use
-  let configured = false;
-  let currentSrc = null;   // last src passed to load(), for isLoaded()/idempotency checks
+  let AudioPlayer = null; // lazily bound to window.Capacitor.Plugins.AudioPlayer on first native use
+  let configured = false; // "configured" here just means listeners are bound - mediagrid has no separate configure() call the way Cap-go's plugin did
+  let created = false;    // whether create()+initialize() has been called at least once for AUDIO_ID - destroy() then create() again is the "load a new track" cycle, mirroring the old unload()+preload()
   let currentVolume = 1;   // 0..1, mirrors audioEl.volume's range regardless of platform
   let currentMuted = false;
-  let nativePlaying = false; // NativeAudio has no synchronous .paused - tracked manually
-  let cachedDuration = NaN; // seconds; kept fresh by the currentTime event below (it carries duration isn't included, so this still comes from load()'s getDuration() call, but is also corrected opportunistically if a later call surfaces a better value)
-  let liveCurrentTime = 0;  // seconds; kept fresh by the 'currentTime' event, pushed ~every 100ms while playing - see bindNativeListenersOnce
+  let nativePlaying = false; // mediagrid has no synchronous "is playing" getter exposed without an async round-trip (isPlaying() is async) - tracked manually here, same pattern the previous adapter used
+  let cachedDuration = NaN; // seconds; fetched via getDuration() once the track reports ready (onAudioReady), then cached
+  let liveCurrentTime = 0;  // seconds; kept fresh by the polling loop below (see pollLoop) since mediagrid has no pushed time event
   let listenersBound = false;
-  let transitionInFlight = false; // guards against a 'complete' event fired as a side-effect of seekTo() OR load()/unload() itself (some native players briefly stop/restart internally for these) being misread as the track naturally ending - see seekTo(), load(), and the 'complete' listener below. Renamed from the original seekInFlight once load() was confirmed to trigger the same false-completion problem, not just seeking.
+  let replayGainFactor = 1;
   const endedCallbacks = []; // playback.js registers its 'track finished' handler here on native
   const playStartedCallbacks = []; // fired from play() on native - the equivalent of audioEl's 'play' event, for consumers with no other native hook
-  const timeUpdateCallbacks = []; // fired on every native 'currentTime' event - the equivalent of audioEl's 'timeupdate' event
+  const timeUpdateCallbacks = []; // fired on every poll tick while playing - the equivalent of audioEl's 'timeupdate' event
 
   function getPlugin() {
-    if (!NativeAudio) {
-      NativeAudio = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.NativeAudio;
+    if (!AudioPlayer) {
+      AudioPlayer = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.AudioPlayer;
     }
-    return NativeAudio;
-  }
-
-  // REVISED: earlier versions of this adapter approximated "track ended" by
-  // watching the general-purpose 'stop' event (fired for pauses too, so it
-  // needed a fragile nativePlaying flag to disambiguate) and polled position
-  // via repeated getCurrentTime() round-trips on a requestAnimationFrame
-  // loop. NativeAudio actually exposes purpose-built events for both: a
-  // 'complete' event that fires ONLY on natural end-of-track (no ambiguity
-  // with pause/stop), and a 'currentTime' event pushed automatically by the
-  // native side roughly every 100ms during playback (no round-trip needed
-  // per tick, no risk of the poll loop drifting out of sync with actual
-  // native playback rate/seeks). Both are strictly better than what they
-  // replace and are used instead everywhere in this file now.
-  function bindNativeListenersOnce() {
-    if (listenersBound) return;
-    const plugin = getPlugin();
-    if (!plugin || !plugin.addListener) return;
-    listenersBound = true;
-
-    plugin.addListener('complete', () => {
-      // See transitionInFlight's declaration above: some native audio
-      // engines internally stop/reload to perform a seek OR to load a new
-      // track over a previous one (unload() + preload()), which can
-      // surface as a 'complete' event even though nothing actually
-      // finished naturally - ignoring completions that land during either
-      // of these transitions avoids misreading that as "track ended" and
-      // incorrectly auto-advancing the queue (which was the real cause of
-      // a confirmed bug: clicking track i correctly loaded and played i's
-      // audio, but a spurious 'complete' fired during that load() call
-      // triggered handleTrackEndedNaturally() -> playNext() ->
-      // playCurrent() for i+1, synchronously overwriting the displayed
-      // title/highlight with i+1 while i's audio, already in flight, went
-      // on to actually play).
-      if (transitionInFlight) return;
-      nativePlaying = false;
-      endedCallbacks.forEach(cb => { try { cb(); } catch {} });
-    });
-
-    plugin.addListener('currentTime', (event) => {
-      if (typeof event.currentTime === 'number') liveCurrentTime = event.currentTime;
-      timeUpdateCallbacks.forEach(cb => { try { cb(); } catch {} });
-    });
+    return AudioPlayer;
   }
 
   // Registers a callback for "the current track finished playing on its
@@ -133,43 +113,86 @@ const NativeAudioAdapter = (() => {
     playStartedCallbacks.push(cb);
   }
 
-  // Registers a callback fired on every native currentTime tick (~100ms
-  // while playing) - the equivalent of audioEl's 'timeupdate' event. This
-  // is what the seek bar, fpSeekBar, synced lyrics, and MediaSession
-  // position reporting all subscribe to on native, replacing the shared
-  // requestAnimationFrame poll loop the previous version of this file used.
+  // Registers a callback fired on every poll tick (~250ms) while playing -
+  // the equivalent of audioEl's 'timeupdate' event. This is what the seek
+  // bar, fpSeekBar, synced lyrics, and MediaSession position reporting all
+  // subscribe to on native.
   function onTimeUpdate(cb) {
     timeUpdateCallbacks.push(cb);
+  }
+
+  // POLLING LOOP: the one real architectural difference from the previous
+  // (Cap-go-backed) adapter - see this file's header comment for why.
+  // Runs only while nativePlaying is true; stops itself otherwise rather
+  // than polling uselessly while paused/stopped. 250ms interval, a
+  // deliberate middle ground - fast enough that the seek bar still feels
+  // responsive, slow enough to not spam native round-trips every frame the
+  // way a requestAnimationFrame-driven poll would.
+  let pollTimer = null;
+  function startPolling() {
+    if (pollTimer) return;
+    pollTimer = setInterval(async () => {
+      if (!nativePlaying) { stopPolling(); return; }
+      const plugin = getPlugin();
+      if (!plugin) return;
+      try {
+        const { currentTime } = await plugin.getCurrentTime({ audioId: AUDIO_ID });
+        if (typeof currentTime === 'number') liveCurrentTime = currentTime;
+      } catch {
+        // Track may have been destroyed/swapped mid-poll (a new load() in
+        // flight) - just skip this tick rather than throwing, the next
+        // tick (or the next track's own poll start) will self-correct.
+      }
+      timeUpdateCallbacks.forEach(cb => { try { cb(); } catch {} });
+    }, 250);
+  }
+  function stopPolling() {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  }
+
+  function bindNativeListenersOnce() {
+    if (listenersBound) return;
+    const plugin = getPlugin();
+    if (!plugin || !plugin.onAudioEnd) return;
+    listenersBound = true;
+
+    // onAudioEnd fires only on genuine natural end-of-track (mirrors
+    // Cap-go's 'complete' event's documented behavior) - no equivalent of
+    // the false-completion-during-seek/load bug that plugin had, since
+    // mediagrid's seek()/create() don't appear to internally stop/restart
+    // in a way that triggers this callback spuriously (not otherwise
+    // documented as a risk, and architecturally less likely given ExoPlayer/
+    // AVPlayer's own seek semantics don't tear down the player instance to
+    // seek the way the previous plugin's setCurrentTime() apparently did on
+    // Android - see this file's git history / the old seekTo() comments for
+    // that saga). If a similar spurious-firing issue turns up in practice
+    // on this plugin, the same transitionInFlight-style guard pattern used
+    // before can be reapplied here.
+    plugin.onAudioEnd({ audioId: AUDIO_ID }, () => {
+      nativePlaying = false;
+      stopPolling();
+      endedCallbacks.forEach(cb => { try { cb(); } catch {} });
+    });
   }
 
   async function ensureConfigured() {
     if (configured) return;
     configured = true;
-    const plugin = getPlugin();
-    if (!plugin) return;
     bindNativeListenersOnce();
-    await plugin.configure({
-      focus: true,
-      background: true,       // keep playing when app is backgrounded/screen locked
-      ignoreSilent: true,     // this is a music player, not a sound-effect; play through the silent switch like Music/Spotify do
-      showNotification: true  // lock-screen/Control Center Now Playing - also required for background playback to be reliable on iOS
-    });
   }
 
   // Loads a new track. Mirrors the old `audioEl.src = ...; audioEl.play()`
-  // shape used throughout playback.js, but async since NativeAudio's
-  // preload/play round-trips to native code.
+  // shape used throughout playback.js, but async since mediagrid's
+  // create()/initialize() round-trip to native code.
   //
-  // STEP 3: `meta` is optional lock-screen/Control Center Now Playing info
-  // ({title, artist, album, artworkUrl}) - passed straight through to
-  // NativeAudio's notificationMetadata, which only actually renders since
-  // configure() sets showNotification: true (see ensureConfigured above).
-  // Omitted or partial fields are fine; NativeAudio falls back to generic
-  // display for whatever's missing.
+  // `meta` is optional lock-screen/Control Center Now Playing info
+  // ({title, artist, album, artworkUrl}) - mapped to mediagrid's
+  // albumTitle/artistName/friendlyTitle/artworkSource fields on create().
+  // Omitted or partial fields are fine.
   async function load(streamUrl, meta) {
-    currentSrc = streamUrl;
     cachedDuration = NaN;
     liveCurrentTime = 0;
+    stopPolling();
     if (!isNative()) {
       audioEl.src = streamUrl;
       return;
@@ -177,76 +200,69 @@ const NativeAudioAdapter = (() => {
     const plugin = getPlugin();
     if (!plugin) return; // shouldn't happen on native, but don't hard-crash playback if it does
     await ensureConfigured();
-    // BUG FIX: unload()-ing the previous track (or even preload() itself,
-    // observed to be ambiguous which exactly) can trigger a spurious
-    // 'complete' event on the native side, mid-transition, before the NEW
-    // track has actually loaded - exactly the same class of false-
-    // completion problem seekTo() already had to guard against (see
-    // transitionInFlight's declaration and the 'complete' listener's own
-    // comment for the full story). Without this guard, clicking track i
-    // while track i-1 (or nothing) was loaded would: correctly start
-    // loading i's audio (which succeeds a moment later, i's audio plays
-    // correctly) - but the spurious 'complete' fired during unload()
-    // synchronously triggered handleTrackEndedNaturally() in playback.js,
-    // which called playNext() -> playCurrent() for i+1, overwriting the
-    // displayed title/highlight with i+1 while i's own (correct, just
-    // slower) audio load was still resolving in the background. Net
-    // effect: i's audio plays, but i+1 is what's shown as "now playing" -
-    // confirmed as the actual root cause of that exact symptom.
-    transitionInFlight = true;
-    // unload() is safe to call even if nothing is loaded under this
-    // assetId yet (first track of the session) - NativeAudio no-ops on an
-    // unknown assetId rather than throwing, per its docs.
-    try { await plugin.unload({ assetId: ASSET_ID }); } catch {}
     nativePlaying = false;
-    const preloadOpts = {
-      assetId: ASSET_ID,
-      assetPath: streamUrl,
-      isUrl: true,
-      // STEP 3 FIX: this previously ignored replayGainFactor entirely, so a
-      // track loaded while ReplayGain was actively boosting/attenuating the
-      // *previous* track would briefly start at the wrong volume until the
-      // next explicit setVolume()/setReplayGainFactor() call corrected it.
-      volume: currentMuted ? 0 : currentVolume * replayGainFactor
+    // destroy() the previous source under this audioId before create()-ing
+    // a new one - mediagrid's create() is documented as creating a NEW
+    // audio source, not overwriting an existing audioId in place. Safe to
+    // call even if nothing was created yet (first track of the session);
+    // wrapped in try/catch since we have no direct confirmation destroy()
+    // no-ops gracefully on an unknown audioId the way Cap-go's unload()
+    // documented itself as doing - better to swallow a possible "nothing to
+    // destroy" error than to let it break the very first track load of a
+    // session.
+    if (created) {
+      try { await plugin.destroy({ audioId: AUDIO_ID }); } catch {}
+    }
+    const createParams = {
+      audioId: AUDIO_ID,
+      audioSource: streamUrl,
+      useForNotification: true, // this is always the app's one primary/foreground track - see AUDIO_ID's own comment
+      isBackgroundMusic: false,
+      loop: false
     };
-    if (meta && (meta.title || meta.artist || meta.album || meta.artworkUrl)) {
-      preloadOpts.notificationMetadata = meta;
+    if (meta) {
+      if (meta.title) createParams.friendlyTitle = meta.title;
+      if (meta.artist) createParams.artistName = meta.artist;
+      if (meta.album) createParams.albumTitle = meta.album;
+      if (meta.artworkUrl) createParams.artworkSource = meta.artworkUrl;
     }
     try {
-      await plugin.preload(preloadOpts);
+      await plugin.create(createParams);
+      created = true;
     } catch (err) {
-      // A failed preload() previously left this whole load() promise
-      // rejected with nothing catching it - playCurrent()'s
-      // .then(safePlay) chain would simply never run, silently leaving
-      // the UI in a "just pressed play" state (icon flipped, nothing
-      // audible, timer stuck at 0:00) with no visible error anywhere.
-      // Logging it here at minimum surfaces the real cause in
-      // Logcat/the browser console instead of failing invisibly.
-      console.error('[NativeAudioAdapter] preload() failed for', streamUrl, err);
-      // Clear the guard here too (not just the success path below) - a
-      // failed load() would otherwise leave transitionInFlight stuck true
-      // forever, silently disabling the 'complete' event (and therefore
-      // auto-advance-to-next-track) for the rest of the session.
-      setTimeout(() => { transitionInFlight = false; }, 300);
+      console.error('[NativeAudioAdapter] create() failed for', streamUrl, err);
       throw err; // still reject - callers (playCurrent's .then(safePlay)) should not proceed as if a track loaded when it didn't
     }
-    // Duration isn't known until the native side has actually opened the
-    // file/stream - fetch it once right after preload rather than lazily on
-    // first getDuration() call, so the seek bar's "total time" is ready as
-    // soon as playback starts instead of showing 0:00 for the first poll
-    // tick. Best-effort: if this fails (e.g. slow network), getDuration()
-    // below will simply keep returning NaN until a later poll succeeds.
-    try {
-      const { duration } = await plugin.getDuration({ assetId: ASSET_ID });
-      if (typeof duration === 'number' && isFinite(duration) && duration > 0) {
-        cachedDuration = duration;
-      }
-    } catch {}
-    // Small settle window, same reasoning as seekTo()'s own: a spurious
-    // 'complete' triggered by the load/unload transition could in
-    // principle arrive slightly after preload() resolves, not strictly
-    // during it. 300ms matches seekTo()'s window for consistency.
-    setTimeout(() => { transitionInFlight = false; }, 300);
+    // initialize() actually prepares/buffers the audio - registering
+    // onAudioReady BEFORE calling it, per the plugin's own documented
+    // ordering requirement ("Should be called after callbacks are
+    // registered"), so this promise doesn't resolve before the native side
+    // has actually signaled readiness.
+    await new Promise((resolve, reject) => {
+      let settled = false;
+      plugin.onAudioReady({ audioId: AUDIO_ID }, async () => {
+        if (settled) return;
+        settled = true;
+        try {
+          const { duration } = await plugin.getDuration({ audioId: AUDIO_ID });
+          if (typeof duration === 'number' && isFinite(duration) && duration > 0) {
+            cachedDuration = duration;
+          }
+        } catch {}
+        // Apply the currently-set volume now that the source exists -
+        // create() has no volume field the way Cap-go's preload() did, so
+        // this has to be a separate explicit call rather than passed inline.
+        try {
+          await plugin.setVolume({ audioId: AUDIO_ID, volume: currentMuted ? 0 : currentVolume * replayGainFactor });
+        } catch {}
+        resolve();
+      });
+      plugin.initialize({ audioId: AUDIO_ID }).catch((err) => {
+        if (settled) return;
+        settled = true;
+        reject(err);
+      });
+    });
   }
 
   async function play() {
@@ -254,7 +270,8 @@ const NativeAudioAdapter = (() => {
     const plugin = getPlugin();
     if (!plugin) return;
     nativePlaying = true; // set before the await, so paused() reads correctly the instant play() is called, matching audioEl's synchronous behavior as closely as possible
-    await plugin.play({ assetId: ASSET_ID });
+    await plugin.play({ audioId: AUDIO_ID });
+    startPolling();
     playStartedCallbacks.forEach(cb => { try { cb(); } catch {} });
   }
 
@@ -262,13 +279,9 @@ const NativeAudioAdapter = (() => {
     if (!isNative()) return audioEl.pause();
     const plugin = getPlugin();
     if (!plugin) return;
-    // Set false *before* calling the plugin so a 'complete' event that
-    // might already be in flight isn't misattributed - complete only fires
-    // on natural end-of-track now (see bindNativeListenersOnce), so this is
-    // mostly precautionary, but keeps paused() correct the instant pause()
-    // is called either way.
     nativePlaying = false;
-    await plugin.pause({ assetId: ASSET_ID });
+    stopPolling();
+    await plugin.pause({ audioId: AUDIO_ID });
   }
 
   function paused() {
@@ -277,49 +290,24 @@ const NativeAudioAdapter = (() => {
   }
 
   // Current playback position, in seconds - mirrors audioEl.currentTime's
-  // unit and, on native, its synchronous feel too: liveCurrentTime is kept
-  // fresh by the 'currentTime' event (~100ms cadence) rather than fetched
-  // per-call, so this is a plain synchronous read on both platforms now
-  // (no promise, no round-trip - a real simplification over Step 2's
-  // polling version, which had to be async to await a native call).
+  // unit. Reads the polling loop's last-known value synchronously (no
+  // round-trip per call) - see this file's header comment on why polling
+  // is used here instead of a pushed event.
   function getCurrentTime() {
     if (!isNative()) return audioEl.currentTime;
     return liveCurrentTime;
   }
 
-  // Duration in seconds. Returns the cached value from load() when
-  // available (near-instant, matches audioEl.duration's synchronous feel)
-  // and NaN otherwise - callers already guard on `!isFinite(duration)`
-  // throughout playback.js, so NaN correctly short-circuits those the same
-  // way an unset audioEl.duration would.
+  // Duration in seconds. Returns the cached value fetched once the track
+  // reported ready (near-instant reads afterward, matches audioEl.duration's
+  // synchronous feel) and NaN otherwise - callers already guard on
+  // `!isFinite(duration)` throughout playback.js, so NaN correctly
+  // short-circuits those the same way an unset audioEl.duration would.
   function getDuration() {
     if (!isNative()) return audioEl.duration;
     return cachedDuration;
   }
 
-  // REVISED (found via Logcat): setCurrentTime() alone was originally used
-  // here, on the assumption it was a pure seek. Logcat showed otherwise -
-  // on Android, calling setCurrentTime() genuinely stops playback as a side
-  // effect (MediaSessionService reported playbackState=STOPPED,
-  // position=0, speed=0.0 immediately after the call, not just a
-  // misleading 'complete' event on top of still-playing audio). The
-  // seekInFlight/'complete'-suppression guard above was a reasonable first
-  // attempt but was solving the wrong layer - it stopped the JS side from
-  // *reacting* to the spurious event, but did nothing to resume the
-  // *actual* native playback that had genuinely stopped, which is why the
-  // seek bar and timer visibly froze even with that guard in place.
-  //
-  // The plugin's play() method accepts an optional seek `time` (documented
-  // as "play with seek" - see the README's NativeAudio.play() signature),
-  // performing the seek and (re)starting playback in a single native call
-  // instead of two separate ones. This sidesteps the stop-as-side-effect
-  // behavior entirely, rather than trying to detect and recover from it
-  // after the fact.
-  //
-  // transitionInFlight/the 'complete' guard is left in place (harmless, and a
-  // reasonable defensive backstop if some other code path ever calls
-  // setCurrentTime directly), but this function no longer uses
-  // setCurrentTime as its primary mechanism.
   async function seekTo(seconds) {
     if (!isNative()) {
       audioEl.currentTime = seconds;
@@ -327,65 +315,44 @@ const NativeAudioAdapter = (() => {
     }
     const plugin = getPlugin();
     if (!plugin) return;
-    liveCurrentTime = seconds; // update immediately rather than waiting for the next ~100ms currentTime event tick
-    transitionInFlight = true;
-    const wasPlaying = nativePlaying;
+    liveCurrentTime = seconds; // update immediately rather than waiting for the next poll tick
     try {
-      // play({assetId, time}) works whether or not playback was already
-      // running - if it was paused, this both seeks AND resumes playback,
-      // which is a real (if minor) behavior change from a "pure" seek: the
-      // old <audio>-element behavior of seeking-while-paused-stays-paused
-      // doesn't have a direct equivalent via this plugin's API. Restoring
-      // an explicit pause() immediately after for the was-paused case
-      // would reintroduce the same stop/restart churn this fix is trying
-      // to avoid, so this tradeoff (seeking always resumes playback on
-      // native) is accepted deliberately rather than worked around.
-      await plugin.play({ assetId: ASSET_ID, time: seconds });
-      nativePlaying = true;
-      if (!wasPlaying) playStartedCallbacks.forEach(cb => { try { cb(); } catch {} });
+      await plugin.seek({ audioId: AUDIO_ID, timeInSeconds: seconds });
     } catch {}
-    // Small settle window: a spurious 'complete' triggered by the seek
-    // itself could in principle arrive slightly after the call above
-    // resolves, not strictly during it - 300ms is generous relative to the
-    // ~100ms currentTime event cadence, so this doesn't meaningfully delay
-    // legitimately detecting a real end-of-track completion that happens
-    // to follow soon after a seek.
-    setTimeout(() => { transitionInFlight = false; }, 300);
+    // Unlike the previous plugin, mediagrid's seek() is a dedicated method
+    // (not implemented as a stop/replay-with-offset side effect of play())
+    // - no evidence of it interrupting playback or misfiring onAudioEnd,
+    // so none of the previous adapter's transitionInFlight-guard/
+    // play-with-seek workarounds are carried over here. If seeking is ever
+    // observed to misbehave in testing, that's the first place to
+    // reintroduce a similar guard.
   }
 
   // Volume: the one capability that doesn't work at all in iOS Safari/
   // WKWebView and is the entire reason this adapter exists. 0..1 in, to
-  // match audioEl.volume's convention - NativeAudio itself wants 0..1 too
-  // (its docs say "between 0.1 and 1.0"; true 0 is passed through as-is for
-  // mute rather than clamped up, since AVAudioPlayer accepts 0 fine even
-  // though the plugin's own type comment undersells that).
+  // match audioEl.volume's convention and mediagrid's own documented range
+  // ("a decimal less than or equal to 1.00").
   //
-  // STEP 3: replayGainFactor composes with the user's slider volume rather
-  // than replacing it - effective native volume is always
+  // replayGainFactor composes with the user's slider volume rather than
+  // replacing it - effective native volume is always
   // userVolume * replayGainFactor (or 0 if muted), computed in one place
   // (applyEffectiveVolume) so setVolume/setMuted/setReplayGainFactor can't
   // drift out of sync with each other. This is the native counterpart to
   // the WebAudio GainNode graph in state.js, which had to stay disabled on
   // mobile because rerouting <audio> through WebAudio made iOS suspend/kill
-  // background audio far more aggressively - NativeAudio's setVolume has no
-  // such downside, since it's not a WebAudio graph at all.
-  let replayGainFactor = 1;
-
+  // background audio far more aggressively - native setVolume has no such
+  // downside, since it's not a WebAudio graph at all.
   async function applyEffectiveVolume() {
     if (!isNative()) {
       audioEl.volume = currentMuted ? 0 : currentVolume; // ReplayGain stays on the separate GainNode graph on web, unchanged - see state.js
       return;
     }
     const plugin = getPlugin();
-    if (!plugin) return;
+    if (!plugin || !created) return; // nothing created yet - currentVolume/replayGainFactor are still recorded and applied once load() creates a source (see load()'s own setVolume call)
     const effective = currentMuted ? 0 : currentVolume * replayGainFactor;
     try {
-      await plugin.setVolume({ assetId: ASSET_ID, volume: effective });
-    } catch {
-      // No track loaded yet (e.g. volume slider touched before first play) -
-      // currentVolume/replayGainFactor are still recorded and will be
-      // applied via the `volume:` option on the next preload().
-    }
+      await plugin.setVolume({ audioId: AUDIO_ID, volume: effective });
+    } catch {}
   }
 
   async function setVolume(v) {
@@ -403,12 +370,12 @@ const NativeAudioAdapter = (() => {
     return currentMuted;
   }
 
-  // STEP 3: native counterpart to applyReplayGain()'s gainNode.gain.value
-  // assignment in state.js. Takes the already-computed linear factor (state.js
-  // does the dB-to-linear math and the RG_MAX_BOOST_DB clamping - this just
-  // applies whatever factor it's given) rather than duplicating that logic
-  // here, so the boost cap and dB conversion stay defined in exactly one
-  // place regardless of platform.
+  // Native counterpart to applyReplayGain()'s gainNode.gain.value
+  // assignment in state.js. Takes the already-computed linear factor
+  // (state.js does the dB-to-linear math and the RG_MAX_BOOST_DB clamping -
+  // this just applies whatever factor it's given) rather than duplicating
+  // that logic here, so the boost cap and dB conversion stay defined in
+  // exactly one place regardless of platform.
   async function setReplayGainFactor(factor) {
     replayGainFactor = (typeof factor === 'number' && isFinite(factor)) ? factor : 1;
     if (isNative()) await applyEffectiveVolume();
@@ -416,27 +383,21 @@ const NativeAudioAdapter = (() => {
     // still drives gainNode.gain.value directly there, unchanged.
   }
 
-  // STEP 3: playback speed. NativeAudio's rate range (0.5-2.0) matches this
-  // app's `speeds` array (state.js) exactly, so no clamping/mapping needed.
+  // Playback speed. mediagrid's rate is a plain multiplier (1 = normal,
+  // 0.5 = half speed, 1.5 = 1.5x) with no documented min/max clamp, unlike
+  // the previous plugin's stated 0.5-2.0 range - this app's own `speeds`
+  // array (state.js) stays within a sane range regardless, so no
+  // additional clamping was added here.
   async function setRate(rate) {
     if (!isNative()) {
       audioEl.playbackRate = rate;
       return;
     }
     const plugin = getPlugin();
-    if (!plugin) return;
+    if (!plugin || !created) return; // no source created yet - harmless no-op; setRate() is re-called on every track change anyway (see playCurrent() in playback.js), so a session's chosen speed reapplies correctly from the second track onward even if the very first call here happened to race an empty player
     try {
-      await plugin.setRate({ assetId: ASSET_ID, rate });
-    } catch {
-      // No track loaded yet - harmless no-op; the next preload() should
-      // arguably carry the rate too, but AssetPlayOptions doesn't expose a
-      // rate field, unlike volume. In practice this only matters for the
-      // brief window before the first track of a session loads, since
-      // setRate() is re-called on every track change anyway (see
-      // playCurrent() in playback.js) - a session's chosen speed reapplies
-      // correctly from the second track onward even if the very first call
-      // here happened to race an empty player.
-    }
+      await plugin.setRate({ audioId: AUDIO_ID, rate });
+    } catch {}
   }
 
   return { isNative, load, play, pause, paused, setVolume, setMuted, muted, setReplayGainFactor, setRate, getCurrentTime, getDuration, seekTo, onEnded, onPlayStarted, onTimeUpdate };

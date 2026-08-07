@@ -69,7 +69,7 @@ AVD_DEVICE     ?= pixel_7
 .PHONY: all setup npm-deps system-deps java-deps android-sdk cap-packages \
         ios-deps init sync android ios build-apk install-apk run-ios clean doctor dev-env \
         emulator-deps emulator-create emulator-run emulator-list emulator-delete \
-        https-init https-renew
+        https-init https-renew android-manifest-patch
 
 all: setup init
 
@@ -286,8 +286,8 @@ cap-packages:
 	npm install --save-dev @capacitor/cli
 	@echo ">> Installing common Capacitor plugins..."
 	npm install --save @capacitor/app @capacitor/splash-screen @capacitor/status-bar @capacitor/filesystem @capacitor/preferences
-	@echo ">> Installing native audio plugin (volume control + background playback)..."
-	npm install --save @capgo/capacitor-native-audio
+	@echo ">> Installing native audio plugin (volume control + background playback + progressive streaming)..."
+	npm install --save @mediagrid/capacitor-native-audio
 
 # ---------------------------------------------------------------------------
 # Initialize Capacitor project + add Android platform (run once)
@@ -300,6 +300,7 @@ init:
 	fi
 	@if [ ! -d "android" ]; then \
 		npx cap add android; \
+		$(MAKE) android-manifest-patch; \
 	else \
 		echo ">> android/ platform already exists, skipping 'cap add android'."; \
 	fi
@@ -307,28 +308,27 @@ ifeq ($(UNAME_S),Darwin)
 	@if [ ! -d "ios" ]; then \
 		npx cap add ios; \
 		echo ""; \
-		echo "‼️  MANUAL STEPS NEEDED for native audio + your HTTP backend:"; \
-		echo "    1) Background playback: open ios/App/App.xcworkspace in Xcode,"; \
-		echo "       select the App target, go to Signing & Capabilities, click"; \
-		echo "       '+ Capability', add 'Background Modes', and check 'Audio,"; \
-		echo "       AirPlay, and Picture in Picture'. Without this,"; \
-		echo "       @capgo/capacitor-native-audio playback stops when backgrounded."; \
-		echo "    2) Cleartext HTTP: capacitor.config.json already sets"; \
-		echo "       server.cleartext=true for the http://213.32.91.190:3838 backend,"; \
-		echo "       but iOS App Transport Security can still need an explicit"; \
-		echo "       exception. If audio/API calls fail with an ATS error in Xcode's"; \
-		echo "       console, add this to ios/App/App/Info.plist inside the root"; \
-		echo "       <dict>:"; \
-		echo "         <key>NSAppTransportSecurity</key>"; \
-		echo "         <dict>"; \
-		echo "           <key>NSExceptionDomains</key>"; \
-		echo "           <dict>"; \
-		echo "             <key>213.32.91.190</key>"; \
-		echo "             <dict>"; \
-		echo "               <key>NSExceptionAllowsInsecureHTTPLoads</key><true/>"; \
-		echo "             </dict>"; \
-		echo "           </dict>"; \
-		echo "         </dict>"; \
+		echo "‼️  MANUAL STEPS NEEDED for native audio background playback:"; \
+		echo "    (No ATS/cleartext HTTP workaround needed anymore - the app"; \
+		echo "    now points at a real https:// URL via Dynu + Let's Encrypt,"; \
+		echo "    see the 'https-init'/'https-renew' targets below.)"; \
+		echo ""; \
+		echo "    1) Add UIBackgroundModes/audio to ios/App/App/Info.plist -"; \
+		echo "       either via Xcode (select the App target, Signing &"; \
+		echo "       Capabilities, '+ Capability', add 'Background Modes',"; \
+		echo "       check 'Audio, AirPlay, and Picture in Picture'), or by"; \
+		echo "       editing Info.plist directly:"; \
+		echo "         <key>UIBackgroundModes</key>"; \
+		echo "         <array>"; \
+		echo "           <string>audio</string>"; \
+		echo "         </array>"; \
+		echo "       Without this, @mediagrid/capacitor-native-audio playback"; \
+		echo "       stops when the app is backgrounded."; \
+		echo "    2) The AudioPlayerService + FOREGROUND_SERVICE permissions"; \
+		echo "       this plugin needs are Android-only (AndroidManifest.xml) -"; \
+		echo "       see the mediagrid plugin's own README for the exact"; \
+		echo "       block, or this project's Info-plist/manifest reference"; \
+		echo "       notes if you saved them from setup."; \
 		echo ""; \
 	else \
 		echo ">> ios/ platform already exists, skipping 'cap add ios'."; \
@@ -338,6 +338,30 @@ else
 	@echo "   run 'npx cap add ios' manually if you just want the project files."
 endif
 	@$(MAKE) sync
+
+# ---------------------------------------------------------------------------
+# Automatically patches android/app/src/main/AndroidManifest.xml and
+# strings.xml with what @mediagrid/capacitor-native-audio requires for
+# Android background playback: the AudioPlayerService declaration, three
+# permissions, and a string resource the service description references.
+#
+# Runs automatically as part of 'make init' right after 'cap add android'
+# (see init's own recipe above) - not meant to be run standalone in normal
+# use, but safe to re-run on its own too: every insertion below is
+# idempotent (checks whether it's already present before adding anything),
+# so running this twice, or against a manifest that already has these
+# entries for some other reason, won't create duplicates.
+#
+# Uses Python's xml.etree rather than sed/grep text-splicing - manifest XML
+# has enough structural nuance (attribute ordering, self-closing tags,
+# nested elements) that regex-based insertion is genuinely fragile here;
+# a real XML parser guarantees well-formed output regardless of how the
+# existing file happens to be formatted.
+# ---------------------------------------------------------------------------
+android-manifest-patch:
+	@echo ">> Patching AndroidManifest.xml + strings.xml for background audio..."
+	@python3 scripts/patch-android-manifest.py
+	@echo ">> Android manifest patch complete."
 
 # ---------------------------------------------------------------------------
 # Sync web assets into native project(s) (run after any web/ or config change)
@@ -491,7 +515,7 @@ dev-env: system-deps npm-deps cap-packages
 	@echo ""
 	@echo "✅  Server dev environment ready."
 	@echo "    - npm deps + Capacitor JS packages installed"
-	@echo "    - @capgo/capacitor-native-audio installed"
+	@echo "    - @mediagrid/capacitor-native-audio installed"
 	@echo "    - No Android SDK / Xcode installed (not needed for JS-only work)"
 	@echo "    Run 'npm run dev' or 'node server.js' to start the backend."
 	@echo ""

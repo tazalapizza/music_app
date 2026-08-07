@@ -108,6 +108,29 @@ workflows:
           echo "iOS platform added. Structure:"
           ls -la ios/App/
 
+      - name: Patch Info.plist for background audio (mediagrid plugin requirement)
+        script: |
+          set -e
+          # @mediagrid/capacitor-native-audio requires UIBackgroundModes/audio
+          # in Info.plist for background playback to work - unlike the
+          # previous Cap-go-backed plugin, which had a background:true JS
+          # config option that handled this implicitly, mediagrid has no
+          # such flag and expects this set directly in the native project.
+          # Applied automatically here (same pattern as the earlier,
+          # now-removed ATS patch step) since "cap add ios" regenerates
+          # Info.plist fresh every build, so a one-time manual Xcode edit
+          # wouldn't survive.
+          PLIST="ios/App/App/Info.plist"
+          plutil -insert UIBackgroundModes -xml '<array/>' "$PLIST" 2>/dev/null || true
+          # Only append 'audio' if it's not already present, so re-running
+          # this step (or a future cap add ios that already includes it for
+          # some reason) doesn't create a duplicate array entry.
+          if ! plutil -p "$PLIST" | grep -q '"audio"'; then
+            plutil -insert UIBackgroundModes.0 -string "audio" "$PLIST"
+          fi
+          echo "--- Verifying UIBackgroundModes was written ---"
+          plutil -p "$PLIST" | grep -A 3 "UIBackgroundModes" || echo "WARNING: UIBackgroundModes not found after patching!"
+
       - name: Verify hand-written native files survived the checkout
         script: |
           set -e
@@ -137,7 +160,7 @@ workflows:
       # in Xcode, which would surface as a build failure in the next step
       # (xcodebuild archive) - specifically a missing-symbol or
       # missing-module error mentioning the plugin, most likely
-      # @capgo/capacitor-native-audio given it's this project's only
+      # @mediagrid/capacitor-native-audio given it's this project's only
       # third-party Capacitor plugin. If the next step fails that way,
       # that's the known issue to investigate, not a new mystery.
 
@@ -181,3 +204,11 @@ workflows:
     artifacts:
       - build/ios/App-unsigned.ipa
       - build/ios/App.xcarchive
+
+    publishing:
+      email:
+        recipients:
+          - your-email@example.com     # <-- put your real email here
+        notify:
+          success: true
+          failure: true
