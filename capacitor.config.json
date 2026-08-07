@@ -3,7 +3,6 @@
   "appName": "Vibing",
   "webDir": "public",
   "server": {
-    "url": "http://213.32.91.190:3838",
-    "cleartext": true
+    "url": "https://nkl3lrtquh.loclx.io"
   }
 }

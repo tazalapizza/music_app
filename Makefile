@@ -17,6 +17,7 @@
 #   make emulator-run        # boot the AVD (leave running in its own terminal)
 #   make emulator-list        # list AVDs on this machine
 #   make emulator-delete       # remove the AVD (e.g. to recreate with different settings)
+#   make tunnel               # (run on the VPS) get a stable HTTPS URL for the backend via loclx
 #   make all             # setup + init in one go
 #   make clean            # remove native platforms + node_modules
 #
@@ -66,7 +67,8 @@ AVD_DEVICE     ?= pixel_7
 # ---- Phony targets --------------------------------------------------------
 .PHONY: all setup npm-deps system-deps java-deps android-sdk cap-packages \
         ios-deps init sync android ios build-apk install-apk run-ios clean doctor dev-env \
-        emulator-deps emulator-create emulator-run emulator-list emulator-delete
+        emulator-deps emulator-create emulator-run emulator-list emulator-delete \
+        tunnel-deps tunnel
 
 all: setup init
 
@@ -492,6 +494,97 @@ dev-env: system-deps npm-deps cap-packages
 	@echo "    - No Android SDK / Xcode installed (not needed for JS-only work)"
 	@echo "    Run 'npm run dev' or 'node server.js' to start the backend."
 	@echo ""
+
+# ---------------------------------------------------------------------------
+# HTTPS TUNNEL (via LocalXpose / loclx) — run this on the VPS, not the build
+# machine. Gives the app a real https:// URL without buying a domain, which
+# fixes a real problem the plain-http:// setup had: iOS's App Transport
+# Security can silently block a WKWebView from loading http:// content even
+# when server.cleartext=true is set in capacitor.config.json and an
+# NSAppTransportSecurity exception is added to Info.plist - this showed up
+# as a black screen with no visible error on first real device testing. A
+# genuine HTTPS URL sidesteps that whole problem category rather than
+# patching around it build after build.
+#
+# LOCLX_PORT defaults to 3838 to match this project's Dockerfile (EXPOSE
+# 3838) - override if your Docker port mapping differs, e.g.:
+#   make tunnel LOCLX_PORT=8080
+#
+# Free tier notes (as of when this was written): 2 active HTTP tunnels,
+# unlimited bandwidth, a unique but RANDOMLY-ASSIGNED *.loclx.io subdomain
+# (custom/chosen subdomains are a paid-tier feature) - the random subdomain
+# DOES stay the same across restarts of the same tunnel process, which is
+# the property that actually matters here (unlike Cloudflare's free Quick
+# Tunnel, which generates a brand-new random URL every single run - ruled
+# out for exactly this reason). Once you have your tunnel's URL, update
+# capacitor.config.json's server.url to it and remove cleartext:true (no
+# longer needed with real HTTPS), then remove the Info.plist ATS-patch step
+# from codemagic.yaml too, since it becomes unnecessary.
+# ---------------------------------------------------------------------------
+LOCLX_PORT ?= 3838
+
+tunnel-deps:
+	@echo ">> Installing loclx (LocalXpose CLI)..."
+	@NPM_ROOT=$$(npm root -g 2>/dev/null); \
+	if command -v loclx >/dev/null 2>&1; then \
+		echo ">> loclx already installed and on PATH - skipping install."; \
+	elif [ -d "$$NPM_ROOT/loclx" ]; then \
+		echo ">> Package already present at $$NPM_ROOT/loclx - skipping reinstall, will just fix the missing symlink below."; \
+	else \
+		echo ">> npm's global install directory needs root - using sudo"; \
+		sudo npm install -g loclx; \
+	fi
+	@# CONFIRMED ROOT CAUSE (not a guess): on this system, npm's automatic
+	@# bin-symlink creation for global installs does not reliably happen -
+	@# verified by a clean uninstall+reinstall still leaving no symlink in
+	@# npm's own configured prefix/bin, even though the package and its
+	@# executable are genuinely present in npm root -g/loclx/bin/loclx.
+	@# Rather than keep reinstalling and hoping, this creates the missing
+	@# symlink explicitly and deterministically every time this target
+	@# runs - idempotent (ln -sf overwrites any existing/broken link rather
+	@# than erroring if run again).
+	@NPM_ROOT=$$(npm root -g 2>/dev/null); \
+	NPM_PREFIX=$$(npm config get prefix 2>/dev/null); \
+	if command -v loclx >/dev/null 2>&1; then \
+		true; \
+	elif [ -f "$$NPM_ROOT/loclx/bin/loclx" ]; then \
+		echo ">> Creating missing symlink: $$NPM_PREFIX/bin/loclx -> $$NPM_ROOT/loclx/bin/loclx"; \
+		sudo ln -sf "$$NPM_ROOT/loclx/bin/loclx" "$$NPM_PREFIX/bin/loclx"; \
+		sudo chmod +x "$$NPM_ROOT/loclx/bin/loclx"; \
+	fi
+	@if ! command -v loclx >/dev/null 2>&1; then \
+		echo ""; \
+		echo "‼️  loclx STILL not on PATH after install + manual symlink fix."; \
+		echo "    This needs manual investigation - run these and check the output:"; \
+		echo "      npm root -g"; \
+		echo "      npm config get prefix"; \
+		echo "      ls \$$(npm root -g)/loclx/bin/ 2>&1"; \
+		echo "    Then compare against \$$PATH to see if the prefix's bin/ folder is on it."; \
+		exit 1; \
+	fi
+	@echo ">> loclx installed successfully: $$(loclx --version 2>/dev/null || echo '(version check unavailable, binary present and on PATH)')"
+	@echo ""
+	@echo ">> One-time only: run 'loclx account login' and follow the prompts"
+	@echo "   (free signup, no credit card) before 'make tunnel' will work."
+	@echo ""
+
+# Runs the tunnel in the foreground - intentionally NOT backgrounded here,
+# since the right way to keep this alive long-term (systemd service, pm2,
+# tmux/screen session, docker-compose with restart:unless-stopped, etc.)
+# depends on how the rest of this VPS is managed, which this Makefile
+# doesn't assume. For a quick manual test, running this in its own
+# terminal/tmux pane is enough; for production-style persistence, wrap this
+# same command in whichever process supervisor this VPS already uses.
+tunnel: tunnel-deps
+	@echo ">> Starting HTTPS tunnel to localhost:$(LOCLX_PORT)..."
+	@echo ">> The printed https://*.loclx.io URL is what goes into"
+	@echo "   capacitor.config.json's server.url - it stays stable across"
+	@echo "   restarts of THIS tunnel process (do not kill and restart"
+	@echo "   carelessly, or you may get reassigned a different subdomain"
+	@echo "   depending on account/plan behavior - verify once, then treat"
+	@echo "   it as stable going forward)."
+	@echo ""
+	loclx tunnel http --to localhost:$(LOCLX_PORT)
 
 # ---------------------------------------------------------------------------
 # Diagnostics

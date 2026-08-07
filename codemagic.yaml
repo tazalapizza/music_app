@@ -34,10 +34,12 @@ workflows:
   #     "Install CocoaPods dependencies" / "pod install" step has been
   #     removed entirely; SPM dependency resolution happens automatically
   #     as part of the xcodebuild step, no separate install command needed.
-  #   - capacitor.config.json (committed to the repo, NOT gitignored) already
-  #     points the app at the live backend (server.url) with cleartext HTTP
-  #     enabled - "cap add ios" picks this up automatically, no extra step
-  #     needed here for that.
+  #   - capacitor.config.json (committed to the repo, NOT gitignored) points
+  #     the app at the live backend via a genuine https:// URL (a
+  #     loclx/LocalXpose tunnel run on the VPS - see the Makefile's 'tunnel'
+  #     target) - "cap add ios" picks this up automatically, no extra step
+  #     needed here for that, and no ATS/Info.plist patching is needed
+  #     either since this is real HTTPS, not cleartext HTTP.
   # ---------------------------------------------------------------------------
   ios-capacitor-unsigned:
     name: iOS Capacitor (Unsigned, for AltStore/Sideloadly)
@@ -137,6 +139,19 @@ workflows:
       # @capgo/capacitor-native-audio given it's this project's only
       # third-party Capacitor plugin. If the next step fails that way,
       # that's the known issue to investigate, not a new mystery.
+
+      # NOTE: the "Patch Info.plist for cleartext HTTP (ATS exception)" step
+      # that used to be here has been REMOVED. Root cause it was working
+      # around: capacitor.config.json originally pointed at a plain
+      # http://<VPS IP>:3838 backend, which iOS's App Transport Security
+      # could silently block inside a WKWebView (even with
+      # server.cleartext=true set) - manifesting as a black screen with no
+      # visible error on real-device testing. capacitor.config.json now
+      # points at a genuine https:// URL instead (via a loclx/LocalXpose
+      # tunnel run on the VPS - see this project's Makefile 'tunnel' and
+      # 'tunnel-deps' targets), which sidesteps the whole ATS problem
+      # category rather than patching around it - no Info.plist exception
+      # needed for a real HTTPS origin.
 
       - name: Build unsigned .app archive
         script: |
