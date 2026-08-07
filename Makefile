@@ -17,7 +17,8 @@
 #   make emulator-run        # boot the AVD (leave running in its own terminal)
 #   make emulator-list        # list AVDs on this machine
 #   make emulator-delete       # remove the AVD (e.g. to recreate with different settings)
-#   make tunnel               # (run on the VPS) get a stable HTTPS URL for the backend via loclx
+#   make https-init DOMAIN=...  # (run on the VPS, once) bootstrap free HTTPS via Dynu + Let's Encrypt
+#   make https-renew          # (run on the VPS) renew the certificate (safe to run anytime, cron-friendly)
 #   make all             # setup + init in one go
 #   make clean            # remove native platforms + node_modules
 #
@@ -68,7 +69,7 @@ AVD_DEVICE     ?= pixel_7
 .PHONY: all setup npm-deps system-deps java-deps android-sdk cap-packages \
         ios-deps init sync android ios build-apk install-apk run-ios clean doctor dev-env \
         emulator-deps emulator-create emulator-run emulator-list emulator-delete \
-        tunnel-deps tunnel
+        https-init https-renew
 
 all: setup init
 
@@ -496,95 +497,108 @@ dev-env: system-deps npm-deps cap-packages
 	@echo ""
 
 # ---------------------------------------------------------------------------
-# HTTPS TUNNEL (via LocalXpose / loclx) — run this on the VPS, not the build
-# machine. Gives the app a real https:// URL without buying a domain, which
-# fixes a real problem the plain-http:// setup had: iOS's App Transport
-# Security can silently block a WKWebView from loading http:// content even
-# when server.cleartext=true is set in capacitor.config.json and an
-# NSAppTransportSecurity exception is added to Info.plist - this showed up
-# as a black screen with no visible error on first real device testing. A
-# genuine HTTPS URL sidesteps that whole problem category rather than
-# patching around it build after build.
+# HTTPS via Dynu + Let's Encrypt — run this on the VPS, not the build
+# machine. REPLACES the earlier loclx/LocalXpose tunnel approach entirely:
+# that was a free-tier third-party tunnel with a confirmed ~15-minute
+# session expiry ("tunnel get expired" error hit during real testing) and a
+# random subdomain that changed on every restart - unworkable for anything
+# beyond short manual testing bursts.
 #
-# LOCLX_PORT defaults to 3838 to match this project's Dockerfile (EXPOSE
-# 3838) - override if your Docker port mapping differs, e.g.:
-#   make tunnel LOCLX_PORT=8080
+# This setup instead gives a real, permanent, auto-renewing HTTPS
+# certificate on a STABLE hostname, with no third-party service sitting in
+# the traffic path at all - just this VPS, Dynu (free dynamic DNS,
+# used here purely as a free hostname registrar, since a Let's Encrypt
+# certificate cannot be issued for a bare IP address), and Let's Encrypt
+# itself via Certbot (the actual thing issuing the free HTTPS certificate -
+# Dynu just provides the hostname it's issued for). docker-compose.yml now
+# runs nginx (TLS termination + reverse proxy to music_app) and certbot
+# (certificate issuance/renewal) alongside the app - see nginx/app.conf for
+# the proxy config.
 #
-# Free tier notes (as of when this was written): 2 active HTTP tunnels,
-# unlimited bandwidth, a unique but RANDOMLY-ASSIGNED *.loclx.io subdomain
-# (custom/chosen subdomains are a paid-tier feature) - the random subdomain
-# DOES stay the same across restarts of the same tunnel process, which is
-# the property that actually matters here (unlike Cloudflare's free Quick
-# Tunnel, which generates a brand-new random URL every single run - ruled
-# out for exactly this reason). Once you have your tunnel's URL, update
-# capacitor.config.json's server.url to it and remove cleartext:true (no
-# longer needed with real HTTPS), then remove the Info.plist ATS-patch step
-# from codemagic.yaml too, since it becomes unnecessary.
+# ONE-TIME SETUP:
+#   1. Go to https://www.dynu.com, sign up (free), add a DDNS hostname
+#      (e.g. "yourname" under a domain Dynu offers, like
+#      yourname.dynu.net), and point its A record at this VPS's IP
+#      (213.32.91.190) in Dynu's own control panel. Since this VPS has a
+#      STATIC IP, no dynamic-update client/cron job is needed - set the A
+#      record once and it stays correct (Dynu's dynamic-update mechanism
+#      exists for the more common case of a changing home IP, which
+#      doesn't apply here).
+#   2. Edit nginx/app.conf: replace both occurrences of
+#      "YOUR_SUBDOMAIN.dynu.net" with your actual chosen hostname (adjust
+#      the suffix too if Dynu assigned a different base domain than
+#      dynu.net when you signed up - check your Dynu control panel).
+#   3. Run: make https-init DOMAIN=yourname.dynu.net
+#      (this bootstraps the certificate - see the target below for exactly
+#      what it does and why the bootstrapping is a multi-step dance)
+#   4. Update capacitor.config.json's server.url to
+#      "https://yourname.dynu.net" - this replaces whatever URL was
+#      there before (the loclx one, or the placeholder).
+#
+# RENEWAL: Let's Encrypt certificates last 90 days. 'make https-renew' runs
+# Certbot's renewal check (safe to run anytime - it only actually renews
+# when within ~30 days of expiry). Set this up as a cron job on the VPS for
+# real hands-off renewal, e.g.:
+#   crontab -e
+#   0 3 * * 0  cd /path/to/music_app && make https-renew >> /var/log/certbot-renew.log 2>&1
 # ---------------------------------------------------------------------------
-LOCLX_PORT ?= 3838
+DOMAIN ?=
 
-tunnel-deps:
-	@echo ">> Installing loclx (LocalXpose CLI)..."
-	@NPM_ROOT=$$(npm root -g 2>/dev/null); \
-	if command -v loclx >/dev/null 2>&1; then \
-		echo ">> loclx already installed and on PATH - skipping install."; \
-	elif [ -d "$$NPM_ROOT/loclx" ]; then \
-		echo ">> Package already present at $$NPM_ROOT/loclx - skipping reinstall, will just fix the missing symlink below."; \
-	else \
-		echo ">> npm's global install directory needs root - using sudo"; \
-		sudo npm install -g loclx; \
-	fi
-	@# CONFIRMED ROOT CAUSE (not a guess): on this system, npm's automatic
-	@# bin-symlink creation for global installs does not reliably happen -
-	@# verified by a clean uninstall+reinstall still leaving no symlink in
-	@# npm's own configured prefix/bin, even though the package and its
-	@# executable are genuinely present in npm root -g/loclx/bin/loclx.
-	@# Rather than keep reinstalling and hoping, this creates the missing
-	@# symlink explicitly and deterministically every time this target
-	@# runs - idempotent (ln -sf overwrites any existing/broken link rather
-	@# than erroring if run again).
-	@NPM_ROOT=$$(npm root -g 2>/dev/null); \
-	NPM_PREFIX=$$(npm config get prefix 2>/dev/null); \
-	if command -v loclx >/dev/null 2>&1; then \
-		true; \
-	elif [ -f "$$NPM_ROOT/loclx/bin/loclx" ]; then \
-		echo ">> Creating missing symlink: $$NPM_PREFIX/bin/loclx -> $$NPM_ROOT/loclx/bin/loclx"; \
-		sudo ln -sf "$$NPM_ROOT/loclx/bin/loclx" "$$NPM_PREFIX/bin/loclx"; \
-		sudo chmod +x "$$NPM_ROOT/loclx/bin/loclx"; \
-	fi
-	@if ! command -v loclx >/dev/null 2>&1; then \
-		echo ""; \
-		echo "‼️  loclx STILL not on PATH after install + manual symlink fix."; \
-		echo "    This needs manual investigation - run these and check the output:"; \
-		echo "      npm root -g"; \
-		echo "      npm config get prefix"; \
-		echo "      ls \$$(npm root -g)/loclx/bin/ 2>&1"; \
-		echo "    Then compare against \$$PATH to see if the prefix's bin/ folder is on it."; \
+https-init:
+	@if [ -z "$(DOMAIN)" ]; then \
+		echo "‼️  Usage: make https-init DOMAIN=yourname.dynu.net"; \
+		echo "    (create the hostname at https://www.dynu.com first,"; \
+		echo "    point its A record at this VPS's IP, and edit"; \
+		echo "    nginx/app.conf AND nginx/app-bootstrap.conf to replace"; \
+		echo "    YOUR_SUBDOMAIN.dynu.net with it in both files)"; \
 		exit 1; \
 	fi
-	@echo ">> loclx installed successfully: $$(loclx --version 2>/dev/null || echo '(version check unavailable, binary present and on PATH)')"
+	@if grep -q "YOUR_SUBDOMAIN.dynu.net" nginx/app.conf nginx/app-bootstrap.conf 2>/dev/null; then \
+		echo "‼️  nginx/app.conf or nginx/app-bootstrap.conf still has the"; \
+		echo "    YOUR_SUBDOMAIN.dynu.net placeholder. Edit both files first"; \
+		echo "    and replace it with $(DOMAIN), then re-run this."; \
+		exit 1; \
+	fi
+	@echo ">> Bootstrapping HTTPS for $(DOMAIN)..."
+	@echo ">> Step 1/4: activating the BOOTSTRAP nginx config (port 80 only,"
+	@echo "   no SSL block - see nginx/app-bootstrap.conf's own comment for"
+	@echo "   why a two-phase config is needed: nginx previously crash-looped"
+	@echo "   on startup because its SSL block referenced a certificate that"
+	@echo "   didn't exist yet, which meant it could never serve the port-80"
+	@echo "   ACME challenge needed to OBTAIN that certificate in the first"
+	@echo "   place. This bootstrap config sidesteps that entirely by having"
+	@echo "   no SSL block at all until step 3.)"
+	cp nginx/app-bootstrap.conf nginx/active.conf
+	@mkdir -p certbot/conf certbot/www
+	docker compose up -d music_app nginx
 	@echo ""
-	@echo ">> One-time only: run 'loclx account login' and follow the prompts"
-	@echo "   (free signup, no credit card) before 'make tunnel' will work."
+	@echo ">> Step 2/4: requesting the certificate from Let's Encrypt..."
+	docker compose run --rm certbot certonly \
+		--webroot --webroot-path /var/www/certbot \
+		--email "" --register-unsafely-without-email \
+		--agree-tos --no-eff-email \
+		-d "$(DOMAIN)"
+	@echo ""
+	@echo ">> Step 3/4: switching to the FULL nginx config now that the"
+	@echo "   certificate genuinely exists..."
+	cp nginx/app.conf nginx/active.conf
+	@echo ""
+	@echo ">> Step 4/4: restarting nginx onto the full config..."
+	docker compose restart nginx
+	@echo ""
+	@echo "✅  HTTPS should now be live at: https://$(DOMAIN)"
+	@echo "    Verify by opening that URL in a browser before updating"
+	@echo "    capacitor.config.json - if it doesn't load, check:"
+	@echo "      docker compose logs nginx"
+	@echo "      docker compose logs certbot"
 	@echo ""
 
-# Runs the tunnel in the foreground - intentionally NOT backgrounded here,
-# since the right way to keep this alive long-term (systemd service, pm2,
-# tmux/screen session, docker-compose with restart:unless-stopped, etc.)
-# depends on how the rest of this VPS is managed, which this Makefile
-# doesn't assume. For a quick manual test, running this in its own
-# terminal/tmux pane is enough; for production-style persistence, wrap this
-# same command in whichever process supervisor this VPS already uses.
-tunnel: tunnel-deps
-	@echo ">> Starting HTTPS tunnel to localhost:$(LOCLX_PORT)..."
-	@echo ">> The printed https://*.loclx.io URL is what goes into"
-	@echo "   capacitor.config.json's server.url - it stays stable across"
-	@echo "   restarts of THIS tunnel process (do not kill and restart"
-	@echo "   carelessly, or you may get reassigned a different subdomain"
-	@echo "   depending on account/plan behavior - verify once, then treat"
-	@echo "   it as stable going forward)."
-	@echo ""
-	loclx tunnel http --to localhost:$(LOCLX_PORT)
+https-renew:
+	@echo ">> Checking/renewing certificate (safe to run anytime - Certbot"
+	@echo "   only actually renews within ~30 days of expiry)..."
+	docker compose run --rm certbot renew
+	docker compose restart nginx
+	@echo ">> Renewal check complete."
 
 # ---------------------------------------------------------------------------
 # Diagnostics
