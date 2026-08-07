@@ -9,6 +9,8 @@
     "android:init": "cap add android",
     "android:sync": "cap sync android",
     "android:open": "cap open android",
+    "ios:init": "cap add ios",
+    "ios:sync": "cap sync ios",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -22,6 +24,7 @@
     "node-id3": "^0.2.9",
     "@capacitor/core": "^8.0.0",
     "@capacitor/android": "^8.0.0",
+    "@capacitor/ios": "^8.0.0",
     "@capgo/capacitor-native-audio": "^8.0.0"
   },
   "devDependencies": {
