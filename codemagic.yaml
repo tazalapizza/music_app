@@ -81,6 +81,16 @@ workflows:
           if [ -f "/tmp/native-plugin-stash/SystemVolumePlugin.swift" ]; then
             cp /tmp/native-plugin-stash/SystemVolumePlugin.swift ios/App/App/SystemVolumePlugin.swift
           fi
+          # DIAGNOSTIC (temporary - remove once the Podfile-not-found issue
+          # is resolved): print exactly what exists right after "cap add
+          # ios" finishes, since the previous build's checkmarked success
+          # output wasn't enough to tell us whether Podfile actually landed
+          # where "cd ios/App && pod install" (the next step) expects it.
+          echo "--- DIAGNOSTIC: current directory and ios/App/ contents ---"
+          pwd
+          ls -la ios/App/ || echo "ios/App/ does not exist!"
+          find ios -maxdepth 3 -iname "Podfile" || echo "No Podfile found anywhere under ios/"
+          echo "--- END DIAGNOSTIC ---"
 
       - name: Verify hand-written native files survived the checkout
         script: |
@@ -95,6 +105,10 @@ workflows:
 
       - name: Install CocoaPods dependencies
         script: |
+          echo "--- DIAGNOSTIC: verifying Podfile location before pod install ---"
+          pwd
+          find . -maxdepth 4 -iname "Podfile" -not -path "*/node_modules/*" || echo "No Podfile found anywhere in repo"
+          echo "--- END DIAGNOSTIC ---"
           cd ios/App && pod install
 
       - name: Build unsigned .app archive
