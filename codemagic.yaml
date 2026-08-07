@@ -1,0 +1,98 @@
+workflows:
+
+  # ===========================================================================
+  # iOS — UNSIGNED build for local sideloading (AltStore / Sideloadly)
+  # ===========================================================================
+  # No Apple Developer account or Codemagic code-signing setup required.
+  # This produces an unsigned .app zipped as .ipa. AltStore/Sideloadly will
+  # do the actual signing on your Mac/PC with your free Apple ID when you
+  # install it to your iPhone. Re-sign every ~7 days per Apple's free-ID limit.
+  #
+  # UPDATED from the original version of this file:
+  #   - Now actually adds the ios/ platform if it doesn't exist yet ("cap add
+  #     ios" was missing entirely before - the old version only ran "cap sync
+  #     ios", which does nothing without an existing ios/ folder to sync into.
+  #     Since ios/ is gitignored (generated, not committed - see this
+  #     project's .gitignore), it will never exist at the start of a fresh
+  #     Codemagic build, so this step is required every run, not optional.
+  #   - capacitor.config.json (committed to the repo, NOT gitignored) already
+  #     points the app at the live backend (server.url) with cleartext HTTP
+  #     enabled - "cap add ios" picks this up automatically, no extra step
+  #     needed here for that.
+  #   - SystemVolumePlugin.swift is gitignored EXCEPT for that one specific
+  #     file (see .gitignore's negated path pattern) - it survives a fresh
+  #     "cap add ios" because git restores it from the repo checkout before
+  #     this workflow runs; "cap add ios" only generates files that don't
+  #     already exist; it doesn't overwrite tracked ones. No copy/restore
+  #     step needed here for that either, as long as it's committed to git.
+  # ---------------------------------------------------------------------------
+  ios-capacitor-unsigned:
+    name: iOS Capacitor (Unsigned, for AltStore/Sideloadly)
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    environment:
+      node: latest
+      vars:
+        XCODE_WORKSPACE: "ios/App/App.xcworkspace"
+        XCODE_SCHEME: "App"
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+      cancel_previous_builds: true
+    scripts:
+      - name: Install npm dependencies
+        script: |
+          npm install
+
+      - name: Add iOS platform (if not already present)
+        script: |
+          if [ ! -d "ios" ]; then
+            npx cap add ios
+          else
+            npx cap sync ios
+          fi
+
+      - name: Verify hand-written native files survived the checkout
+        script: |
+          set -e
+          if [ ! -f "ios/App/App/SystemVolumePlugin.swift" ]; then
+            echo "ERROR: SystemVolumePlugin.swift is missing from ios/App/App/."
+            echo "Check that it is committed to git and NOT excluded by .gitignore"
+            echo "(it should be explicitly re-included via a negated ! pattern)."
+            exit 1
+          fi
+          echo "SystemVolumePlugin.swift found - OK"
+
+      - name: Install CocoaPods dependencies
+        script: |
+          cd ios/App && pod install
+
+      - name: Build unsigned .app archive
+        script: |
+          xcodebuild archive \
+            -workspace "$XCODE_WORKSPACE" \
+            -scheme "$XCODE_SCHEME" \
+            -configuration Release \
+            -archivePath build/ios/App.xcarchive \
+            -sdk iphoneos \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Package unsigned .app as .ipa (Payload/App.app zipped)
+        script: |
+          set -e
+          APP_PATH="build/ios/App.xcarchive/Products/Applications/App.app"
+          mkdir -p build/ios/ipa/Payload
+          cp -R "$APP_PATH" build/ios/ipa/Payload/
+          cd build/ios/ipa
+          zip -r -y ../App-unsigned.ipa Payload
+          cd ../../..
+          echo "Unsigned IPA created at build/ios/App-unsigned.ipa"
+
+    artifacts:
+      - build/ios/App-unsigned.ipa
+      - build/ios/App.xcarchive
