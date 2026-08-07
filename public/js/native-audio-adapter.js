@@ -64,7 +64,7 @@ const NativeAudioAdapter = (() => {
   let cachedDuration = NaN; // seconds; kept fresh by the currentTime event below (it carries duration isn't included, so this still comes from load()'s getDuration() call, but is also corrected opportunistically if a later call surfaces a better value)
   let liveCurrentTime = 0;  // seconds; kept fresh by the 'currentTime' event, pushed ~every 100ms while playing - see bindNativeListenersOnce
   let listenersBound = false;
-  let seekInFlight = false; // guards against a 'complete' event fired as a side-effect of setCurrentTime() itself (some native players briefly stop/restart internally to seek) being misread as the track naturally ending - see seekTo() and the 'complete' listener below
+  let transitionInFlight = false; // guards against a 'complete' event fired as a side-effect of seekTo() OR load()/unload() itself (some native players briefly stop/restart internally for these) being misread as the track naturally ending - see seekTo(), load(), and the 'complete' listener below. Renamed from the original seekInFlight once load() was confirmed to trigger the same false-completion problem, not just seeking.
   const endedCallbacks = []; // playback.js registers its 'track finished' handler here on native
   const playStartedCallbacks = []; // fired from play() on native - the equivalent of audioEl's 'play' event, for consumers with no other native hook
   const timeUpdateCallbacks = []; // fired on every native 'currentTime' event - the equivalent of audioEl's 'timeupdate' event
@@ -94,13 +94,20 @@ const NativeAudioAdapter = (() => {
     listenersBound = true;
 
     plugin.addListener('complete', () => {
-      // See seekInFlight's declaration above: some native audio engines
-      // internally stop/reload to perform a seek, which can surface as a
-      // 'complete' event even though the track didn't actually finish -
-      // ignoring completions that land during a seek avoids misreading
-      // that as "track ended" and incorrectly flipping paused()/the
-      // play-pause icon or auto-advancing the queue.
-      if (seekInFlight) return;
+      // See transitionInFlight's declaration above: some native audio
+      // engines internally stop/reload to perform a seek OR to load a new
+      // track over a previous one (unload() + preload()), which can
+      // surface as a 'complete' event even though nothing actually
+      // finished naturally - ignoring completions that land during either
+      // of these transitions avoids misreading that as "track ended" and
+      // incorrectly auto-advancing the queue (which was the real cause of
+      // a confirmed bug: clicking track i correctly loaded and played i's
+      // audio, but a spurious 'complete' fired during that load() call
+      // triggered handleTrackEndedNaturally() -> playNext() ->
+      // playCurrent() for i+1, synchronously overwriting the displayed
+      // title/highlight with i+1 while i's audio, already in flight, went
+      // on to actually play).
+      if (transitionInFlight) return;
       nativePlaying = false;
       endedCallbacks.forEach(cb => { try { cb(); } catch {} });
     });
@@ -170,6 +177,23 @@ const NativeAudioAdapter = (() => {
     const plugin = getPlugin();
     if (!plugin) return; // shouldn't happen on native, but don't hard-crash playback if it does
     await ensureConfigured();
+    // BUG FIX: unload()-ing the previous track (or even preload() itself,
+    // observed to be ambiguous which exactly) can trigger a spurious
+    // 'complete' event on the native side, mid-transition, before the NEW
+    // track has actually loaded - exactly the same class of false-
+    // completion problem seekTo() already had to guard against (see
+    // transitionInFlight's declaration and the 'complete' listener's own
+    // comment for the full story). Without this guard, clicking track i
+    // while track i-1 (or nothing) was loaded would: correctly start
+    // loading i's audio (which succeeds a moment later, i's audio plays
+    // correctly) - but the spurious 'complete' fired during unload()
+    // synchronously triggered handleTrackEndedNaturally() in playback.js,
+    // which called playNext() -> playCurrent() for i+1, overwriting the
+    // displayed title/highlight with i+1 while i's own (correct, just
+    // slower) audio load was still resolving in the background. Net
+    // effect: i's audio plays, but i+1 is what's shown as "now playing" -
+    // confirmed as the actual root cause of that exact symptom.
+    transitionInFlight = true;
     // unload() is safe to call even if nothing is loaded under this
     // assetId yet (first track of the session) - NativeAudio no-ops on an
     // unknown assetId rather than throwing, per its docs.
@@ -199,6 +223,11 @@ const NativeAudioAdapter = (() => {
       // Logging it here at minimum surfaces the real cause in
       // Logcat/the browser console instead of failing invisibly.
       console.error('[NativeAudioAdapter] preload() failed for', streamUrl, err);
+      // Clear the guard here too (not just the success path below) - a
+      // failed load() would otherwise leave transitionInFlight stuck true
+      // forever, silently disabling the 'complete' event (and therefore
+      // auto-advance-to-next-track) for the rest of the session.
+      setTimeout(() => { transitionInFlight = false; }, 300);
       throw err; // still reject - callers (playCurrent's .then(safePlay)) should not proceed as if a track loaded when it didn't
     }
     // Duration isn't known until the native side has actually opened the
@@ -213,6 +242,11 @@ const NativeAudioAdapter = (() => {
         cachedDuration = duration;
       }
     } catch {}
+    // Small settle window, same reasoning as seekTo()'s own: a spurious
+    // 'complete' triggered by the load/unload transition could in
+    // principle arrive slightly after preload() resolves, not strictly
+    // during it. 300ms matches seekTo()'s window for consistency.
+    setTimeout(() => { transitionInFlight = false; }, 300);
   }
 
   async function play() {
@@ -282,7 +316,7 @@ const NativeAudioAdapter = (() => {
   // behavior entirely, rather than trying to detect and recover from it
   // after the fact.
   //
-  // seekInFlight/the 'complete' guard is left in place (harmless, and a
+  // transitionInFlight/the 'complete' guard is left in place (harmless, and a
   // reasonable defensive backstop if some other code path ever calls
   // setCurrentTime directly), but this function no longer uses
   // setCurrentTime as its primary mechanism.
@@ -294,7 +328,7 @@ const NativeAudioAdapter = (() => {
     const plugin = getPlugin();
     if (!plugin) return;
     liveCurrentTime = seconds; // update immediately rather than waiting for the next ~100ms currentTime event tick
-    seekInFlight = true;
+    transitionInFlight = true;
     const wasPlaying = nativePlaying;
     try {
       // play({assetId, time}) works whether or not playback was already
@@ -316,7 +350,7 @@ const NativeAudioAdapter = (() => {
     // ~100ms currentTime event cadence, so this doesn't meaningfully delay
     // legitimately detecting a real end-of-track completion that happens
     // to follow soon after a seek.
-    setTimeout(() => { seekInFlight = false; }, 300);
+    setTimeout(() => { transitionInFlight = false; }, 300);
   }
 
   // Volume: the one capability that doesn't work at all in iOS Safari/

@@ -74,6 +74,70 @@ function attachLongPressContextMenu(row, item) {
   }, { capture: true });
 }
 
+// WORKAROUND for a confirmed WKWebView/Capacitor bug (matches
+// ionic-team/capacitor#6390 exactly): tapping quickly through a VERTICAL
+// list of elements on iOS can misattribute a click's synthetic 'click'
+// event to the WRONG element - specifically, clicking row i's onClick
+// handler doesn't fire; instead row (i-1)'s handler fires again, and row
+// i's own action only takes effect on the NEXT tap. This does not happen
+// in Safari itself, on desktop, in the PWA, or on Android - it's specific
+// to WKWebView's synthetic-click generation from touch events when taps
+// happen close together, and is a known, previously-reported, still-open
+// issue in Capacitor's own tracker with no accepted upstream fix.
+//
+// The standard, well-established workaround (used broadly for the
+// unrelated-but-similarly-rooted "300ms click delay" problem WKWebView also
+// has) is to stop relying on the synthetic 'click' event for touch input
+// and act on the raw pointerup instead - it fires immediately, tied
+// directly to the real touch release, with none of the synthetic-event
+// generation/ordering risk that click carries. Deliberately scoped to
+// TOUCH input only (checked via e.pointerType) - desktop mouse clicks (for
+// ctrl/shift-click multi-select, which the existing 'click' handler already
+// supports) are completely unaffected and keep using the normal 'click'
+// listener registered alongside this one.
+//
+// Guards against firing during a scroll/drag (a touch that moves
+// significantly between pointerdown and pointerup is a scroll gesture, not
+// a tap) and against double-firing alongside the long-press context menu
+// above (which sets/reads the same row's pointer state independently -
+// see attachLongPressContextMenu's own 'firedMenu' flag, checked here via
+// a shared attribute so the two don't fire for the same gesture).
+const FAST_TAP_MOVE_TOLERANCE = 10; // px, matches LONG_PRESS_MOVE_TOLERANCE
+function attachFastTapWorkaround(row, item, action) {
+  if (!action) return;
+  let startX = 0, startY = 0, tracking = false;
+  row.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse') return; // mouse keeps using the normal 'click' listener
+    startX = e.clientX;
+    startY = e.clientY;
+    tracking = true;
+  });
+  row.addEventListener('pointermove', (e) => {
+    if (!tracking) return;
+    if (Math.abs(e.clientX - startX) > FAST_TAP_MOVE_TOLERANCE || Math.abs(e.clientY - startY) > FAST_TAP_MOVE_TOLERANCE) {
+      tracking = false; // moved too far - this is a scroll, not a tap
+    }
+  });
+  row.addEventListener('pointerup', (e) => {
+    if (e.pointerType === 'mouse' || !tracking) { tracking = false; return; }
+    tracking = false;
+    if (window.mobileSelectModeActive) return; // let the normal 'click' listener's select-mode branch handle this instead - same reasoning as handleRowClickMobileAware
+    action();
+    // Suppress the synthetic 'click' WKWebView will still fire shortly
+    // after this pointerup, so the row's action doesn't run twice (once
+    // here, once via the normal 'click' listener once WKWebView gets
+    // around to firing it).
+    row.dataset.suppressNextClick = 'true';
+  });
+  row.addEventListener('click', (e) => {
+    if (row.dataset.suppressNextClick === 'true') {
+      delete row.dataset.suppressNextClick;
+      e.stopPropagation();
+      e.preventDefault();
+    }
+  }, { capture: true });
+}
+
 function buildFileRow(item, opts = {}) {
   const row = document.createElement('div');
   row.className = 'file-row';
@@ -202,8 +266,10 @@ function buildFileRow(item, opts = {}) {
         ? () => handleLibrarySongClick(item)
         : (opts.showOpenFolder ? () => playSingle(item.path) : () => handleSongClick(item));
       row.addEventListener('click', (e) => handleRowClickMobileAware(e, item, defaultAction));
+      attachFastTapWorkaround(row, item, defaultAction);
     } else {
       row.addEventListener('click', (e) => handleRowClickMobileAware(e, item, null));
+      attachFastTapWorkaround(row, item, null);
     }
   }
   if (opts.showOpenFolder) {
@@ -234,9 +300,49 @@ function buildFileRow(item, opts = {}) {
   // (see responsive.css), which per the app's select-mode design also
   // guarantees selectedItems is empty at that point — so this always acts
   // on just this single row, same as a fresh right-click on desktop.
-  row.querySelector('.row-menu-btn').addEventListener('click', (e) => {
+  //
+  // Uses the same pointerup-based workaround as attachFastTapWorkaround
+  // (see that function's own long comment for the full story) rather than
+  // a plain 'click' listener - this button has the identical WKWebView
+  // click-misattribution vulnerability the row's own tap action had, and
+  // was reported broken on both PWA and the native app, which fits: a
+  // plain 'click' listener on a small nested button is exactly the kind of
+  // target most likely to miss entirely under WKWebView's flaky synthetic-
+  // click generation, even before considering the misattribution bug -
+  // pointerup fires on the real touch release with neither problem.
+  const menuBtn = row.querySelector('.row-menu-btn');
+  let menuBtnTracking = false, menuBtnStartX = 0, menuBtnStartY = 0;
+  menuBtn.addEventListener('pointerdown', (e) => {
+    menuBtnStartX = e.clientX;
+    menuBtnStartY = e.clientY;
+    menuBtnTracking = true;
+  });
+  menuBtn.addEventListener('pointermove', (e) => {
+    if (!menuBtnTracking) return;
+    if (Math.abs(e.clientX - menuBtnStartX) > FAST_TAP_MOVE_TOLERANCE || Math.abs(e.clientY - menuBtnStartY) > FAST_TAP_MOVE_TOLERANCE) {
+      menuBtnTracking = false;
+    }
+  });
+  menuBtn.addEventListener('pointerup', (e) => {
+    if (!menuBtnTracking) return;
+    menuBtnTracking = false;
     e.stopPropagation();
-    const rect = e.currentTarget.getBoundingClientRect();
+    const rect = menuBtn.getBoundingClientRect();
+    showContextMenu(rect.right, rect.bottom, item);
+    menuBtn.dataset.suppressNextClick = 'true';
+  });
+  // Desktop mouse still works via this plain 'click' listener - mouse
+  // clicks don't have the WKWebView bug, and pointerdown/pointerup above
+  // already stopPropagation()'d for touch, so this only ever fires for a
+  // genuine mouse click or as the (now-suppressed) synthetic click that
+  // follows a touch tap.
+  menuBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (menuBtn.dataset.suppressNextClick === 'true') {
+      delete menuBtn.dataset.suppressNextClick;
+      return;
+    }
+    const rect = menuBtn.getBoundingClientRect();
     showContextMenu(rect.right, rect.bottom, item);
   });
   return row;

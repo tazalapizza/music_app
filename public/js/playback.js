@@ -6,6 +6,18 @@
 // ---------------------------------------------------------------------------
 
 // ---------- Playback ----------
+// Incremented on every playCurrent() call - lets async work scheduled by
+// one call (getMeta() below, most importantly) recognize when a LATER
+// playCurrent() call has already superseded it, so a slow/delayed response
+// for an old track can't overwrite the DOM with stale metadata after a
+// newer track has already taken over. Without this, clicking track i then
+// quickly clicking track i+1 could let i's getMeta() response resolve
+// AFTER i+1's playCurrent() already ran, incorrectly showing i's
+// title/artist while i+1 (or whichever the audio engine actually loaded)
+// is what's really playing - exactly the "wrong metadata, right audio"
+// symptom this was built to fix.
+let playCurrentGeneration = 0;
+
 // #playPauseBtn holds two overlaid SVG icons (.icon-play / .icon-pause,
 // see index.html) rather than a text glyph — this toggles which one shows
 // instead of setting textContent, which would otherwise wipe them out.
@@ -386,6 +398,8 @@ let justEnded = false; // true after the last track ends with nothing queued to 
 function playCurrent() {
   if (queueIndex < 0 || queueIndex >= queue.length) return;
   justEnded = false;
+  playCurrentGeneration++;
+  const myGeneration = playCurrentGeneration;
   const track = queue[queueIndex];
   // STEP 3: pass along cached title/artist/album/art (when already warm -
   // see the metaCache lookup and its own long comment further below) so
@@ -431,7 +445,20 @@ function playCurrent() {
   // correctly.
   const streamUrl = `${location.origin}/api/stream?path=${encodeURIComponent(track.path)}`;
   NativeAudioAdapter.load(streamUrl, loadMeta)
-    .then(safePlay)
+    .then(() => {
+      // Stale-response guard: if the user clicked another track while this
+      // one's (potentially slow, native-round-trip) load() was still in
+      // flight, a newer playCurrent() call has already fired its own
+      // load()/safePlay() for the track that should actually be playing
+      // now. Calling safePlay() here anyway would resume/restart playback
+      // using THIS call's now-outdated context, racing against - or
+      // outright overriding - whichever track the user actually clicked
+      // last. This mirrors the same staleness problem the getMeta()
+      // callback below has, just for playback itself rather than just the
+      // displayed metadata - see playCurrentGeneration's own comment.
+      if (myGeneration !== playCurrentGeneration) return;
+      safePlay();
+    })
     .catch(err => {
       // A failed load() (e.g. native preload() rejecting - see
       // native-audio-adapter.js) previously vanished silently here: nothing
@@ -444,6 +471,10 @@ function playCurrent() {
       // surfaces the failure and leaves the UI in a state that matches
       // reality instead of lying that playback is active.
       console.error('[playCurrent] failed to load track:', track.path, err);
+      // Same staleness guard as the .then() above - an old, now-superseded
+      // call's failure shouldn't be allowed to reset the play/pause icon
+      // out from under whatever track is actually current now.
+      if (myGeneration !== playCurrentGeneration) return;
       setPlayPauseIcon(false);
     });
   nativeCurrentTimeSec = 0;
@@ -568,6 +599,12 @@ function playCurrent() {
   updatePlayingHighlight();
   loadLyricsForTrack(track.path);
   getMeta(track.path).then(meta => {
+    // Stale-response guard: if a newer playCurrent() call has already run
+    // since this fetch started, applying this (old) metadata now would
+    // overwrite whatever the current track's own applyMeta() already
+    // wrote - silently showing the wrong title/artist for what's actually
+    // playing. See playCurrentGeneration's own comment for the full story.
+    if (myGeneration !== playCurrentGeneration) return;
     // If metadata was already cached above, applyMeta() (and its
     // startMarquee() call) already ran synchronously with the same data —
     // calling it again here would race startMarquee()'s own pending
