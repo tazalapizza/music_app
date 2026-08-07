@@ -19,10 +19,21 @@ workflows:
   #     fresh checkout without the rest of the Xcode project (Podfile
   #     included) actually being there, so the check picked "cap sync ios"
   #     and pod install failed looking for a nonexistent Podfile.
-  #   - This version (v3) sidesteps detecting "complete vs partial" ios/
-  #     entirely: it stashes the one hand-written Swift file, wipes ios/
-  #     unconditionally, always runs a genuinely fresh "cap add ios", then
-  #     restores the stashed file into the now-complete generated project.
+  #   - v3 sidesteps detecting "complete vs partial" ios/ entirely: it
+  #     stashes the one hand-written Swift file, wipes ios/ unconditionally,
+  #     always runs a genuinely fresh "cap add ios", then restores the
+  #     stashed file into the now-complete generated project. This DID fix
+  #     the "cap sync ios ran instead of cap add ios" problem, but a
+  #     "No Podfile found" error persisted even after a confirmed-fresh
+  #     "cap add ios" - which turned out to be a separate, deeper issue:
+  #   - v4 (current): Capacitor 8 changed the DEFAULT iOS dependency manager
+  #     from CocoaPods to Swift Package Manager (SPM). "cap add ios" on
+  #     Capacitor 8 generates a CapApp-SPM/ folder, not a Podfile, by
+  #     design - there was never a Podfile to find, on any version of this
+  #     script, because this project is on @capacitor/ios ^8.0.0. The
+  #     "Install CocoaPods dependencies" / "pod install" step has been
+  #     removed entirely; SPM dependency resolution happens automatically
+  #     as part of the xcodebuild step, no separate install command needed.
   #   - capacitor.config.json (committed to the repo, NOT gitignored) already
   #     points the app at the live backend (server.url) with cleartext HTTP
   #     enabled - "cap add ios" picks this up automatically, no extra step
@@ -35,7 +46,14 @@ workflows:
     environment:
       node: latest
       vars:
-        XCODE_WORKSPACE: "ios/App/App.xcworkspace"
+        # NOTE: this is -project, not -workspace, because Capacitor 8's
+        # default SPM-based iOS setup (see the header comment above) does
+        # not generate an App.xcworkspace at all - only CocoaPods-based
+        # projects had one (it existed to tie your project + Pods.xcodeproj
+        # together, which SPM doesn't need). Confirmed via this project's
+        # own Codemagic build log: `ls ios/App/` showed App/, App.xcodeproj/,
+        # and CapApp-SPM/, with no .xcworkspace present.
+        XCODE_PROJECT: "ios/App/App.xcodeproj"
         XCODE_SCHEME: "App"
     triggering:
       events:
@@ -81,16 +99,11 @@ workflows:
           if [ -f "/tmp/native-plugin-stash/SystemVolumePlugin.swift" ]; then
             cp /tmp/native-plugin-stash/SystemVolumePlugin.swift ios/App/App/SystemVolumePlugin.swift
           fi
-          # DIAGNOSTIC (temporary - remove once the Podfile-not-found issue
-          # is resolved): print exactly what exists right after "cap add
-          # ios" finishes, since the previous build's checkmarked success
-          # output wasn't enough to tell us whether Podfile actually landed
-          # where "cd ios/App && pod install" (the next step) expects it.
-          echo "--- DIAGNOSTIC: current directory and ios/App/ contents ---"
-          pwd
-          ls -la ios/App/ || echo "ios/App/ does not exist!"
-          find ios -maxdepth 3 -iname "Podfile" || echo "No Podfile found anywhere under ios/"
-          echo "--- END DIAGNOSTIC ---"
+          # Light confirmation output (not full diagnostics anymore - the
+          # earlier Podfile-not-found investigation is resolved, see the
+          # note above the removed "Install CocoaPods dependencies" step).
+          echo "iOS platform added. Structure:"
+          ls -la ios/App/
 
       - name: Verify hand-written native files survived the checkout
         script: |
@@ -103,18 +116,32 @@ workflows:
           fi
           echo "SystemVolumePlugin.swift found - OK"
 
-      - name: Install CocoaPods dependencies
-        script: |
-          echo "--- DIAGNOSTIC: verifying Podfile location before pod install ---"
-          pwd
-          find . -maxdepth 4 -iname "Podfile" -not -path "*/node_modules/*" || echo "No Podfile found anywhere in repo"
-          echo "--- END DIAGNOSTIC ---"
-          cd ios/App && pod install
+      # NOTE: the "Install CocoaPods dependencies" / "pod install" step that
+      # used to be here has been REMOVED. Root cause of the "No Podfile
+      # found" failure: Capacitor 8 changed the default iOS dependency
+      # manager from CocoaPods to Swift Package Manager (SPM) - "cap add
+      # ios" on Capacitor 8 generates a CapApp-SPM/ folder instead of a
+      # Podfile, by design, not as a bug. There is no Podfile to install
+      # against in an SPM-based project at all, so this step was simply the
+      # wrong tool for what "cap add ios" actually produces on Capacitor 8.
+      # SPM dependency resolution happens automatically as part of the
+      # xcodebuild step below (Xcode resolves Swift Package dependencies as
+      # part of a normal build), no separate install command needed.
+      #
+      # KNOWN RISK TO WATCH FOR: there is a documented Capacitor 8 + SPM
+      # issue (ionic-team/capacitor#8325) where plugin products from
+      # CapApp-SPM sometimes aren't automatically linked to the App target
+      # in Xcode, which would surface as a build failure in the next step
+      # (xcodebuild archive) - specifically a missing-symbol or
+      # missing-module error mentioning the plugin, most likely
+      # @capgo/capacitor-native-audio given it's this project's only
+      # third-party Capacitor plugin. If the next step fails that way,
+      # that's the known issue to investigate, not a new mystery.
 
       - name: Build unsigned .app archive
         script: |
           xcodebuild archive \
-            -workspace "$XCODE_WORKSPACE" \
+            -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
             -configuration Release \
             -archivePath build/ios/App.xcarchive \
