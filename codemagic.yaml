@@ -8,23 +8,25 @@ workflows:
   # do the actual signing on your Mac/PC with your free Apple ID when you
   # install it to your iPhone. Re-sign every ~7 days per Apple's free-ID limit.
   #
-  # UPDATED from the original version of this file:
-  #   - Now actually adds the ios/ platform if it doesn't exist yet ("cap add
-  #     ios" was missing entirely before - the old version only ran "cap sync
-  #     ios", which does nothing without an existing ios/ folder to sync into.
-  #     Since ios/ is gitignored (generated, not committed - see this
-  #     project's .gitignore), it will never exist at the start of a fresh
-  #     Codemagic build, so this step is required every run, not optional.
+  # UPDATED from the original version of this file (twice now):
+  #   - v1 only ran "cap sync ios", which does nothing without an existing
+  #     ios/ folder to sync into - since ios/ is gitignored except for one
+  #     hand-written file (see this project's .gitignore), a fresh checkout
+  #     never had a usable project there at all.
+  #   - v2 added a directory-exists check to decide between "cap add ios"
+  #     and "cap sync ios" - but this was ALSO wrong, because the one
+  #     tracked file (SystemVolumePlugin.swift) makes ios/ "exist" in a
+  #     fresh checkout without the rest of the Xcode project (Podfile
+  #     included) actually being there, so the check picked "cap sync ios"
+  #     and pod install failed looking for a nonexistent Podfile.
+  #   - This version (v3) sidesteps detecting "complete vs partial" ios/
+  #     entirely: it stashes the one hand-written Swift file, wipes ios/
+  #     unconditionally, always runs a genuinely fresh "cap add ios", then
+  #     restores the stashed file into the now-complete generated project.
   #   - capacitor.config.json (committed to the repo, NOT gitignored) already
   #     points the app at the live backend (server.url) with cleartext HTTP
   #     enabled - "cap add ios" picks this up automatically, no extra step
   #     needed here for that.
-  #   - SystemVolumePlugin.swift is gitignored EXCEPT for that one specific
-  #     file (see .gitignore's negated path pattern) - it survives a fresh
-  #     "cap add ios" because git restores it from the repo checkout before
-  #     this workflow runs; "cap add ios" only generates files that don't
-  #     already exist; it doesn't overwrite tracked ones. No copy/restore
-  #     step needed here for that either, as long as it's committed to git.
   # ---------------------------------------------------------------------------
   ios-capacitor-unsigned:
     name: iOS Capacitor (Unsigned, for AltStore/Sideloadly)
@@ -47,12 +49,37 @@ workflows:
         script: |
           npm install
 
-      - name: Add iOS platform (if not already present)
+      - name: Add iOS platform (always fresh - see comment)
         script: |
-          if [ ! -d "ios" ]; then
-            npx cap add ios
-          else
-            npx cap sync ios
+          set -e
+          # FIXED BUG: the previous version of this step checked
+          # `if [ ! -d "ios" ]` to decide between "cap add ios" (full
+          # scaffold + Podfile) and "cap sync ios" (sync-only, assumes a
+          # complete project already exists). That check was wrong here
+          # specifically BECAUSE SystemVolumePlugin.swift is committed to
+          # git at ios/App/App/SystemVolumePlugin.swift (see .gitignore's
+          # negated path pattern) - a fresh git checkout of this repo
+          # already has an ios/ directory containing that one file, so the
+          # directory-exists check passed even though nothing else (Podfile,
+          # the Xcode project, AppDelegate.swift, etc.) actually existed yet.
+          # "cap sync ios" ran instead of "cap add ios", found no Podfile to
+          # sync against, and pod install failed with ENOENT.
+          #
+          # Fix: stash the one hand-written file we actually care about
+          # BEFORE touching ios/ at all, wipe whatever partial ios/ came
+          # from the checkout, run a genuinely fresh "cap add ios" (which
+          # generates the full scaffold including Podfile), then restore
+          # the hand-written file into the now-complete project structure.
+          # This sidesteps the "is ios/ complete or partial" ambiguity
+          # entirely rather than trying to detect it correctly.
+          if [ -f "ios/App/App/SystemVolumePlugin.swift" ]; then
+            mkdir -p /tmp/native-plugin-stash
+            cp ios/App/App/SystemVolumePlugin.swift /tmp/native-plugin-stash/
+          fi
+          rm -rf ios
+          npx cap add ios
+          if [ -f "/tmp/native-plugin-stash/SystemVolumePlugin.swift" ]; then
+            cp /tmp/native-plugin-stash/SystemVolumePlugin.swift ios/App/App/SystemVolumePlugin.swift
           fi
 
       - name: Verify hand-written native files survived the checkout
@@ -96,3 +123,11 @@ workflows:
     artifacts:
       - build/ios/App-unsigned.ipa
       - build/ios/App.xcarchive
+
+    publishing:
+      email:
+        recipients:
+          - your-email@example.com     # <-- put your real email here
+        notify:
+          success: true
+          failure: true
