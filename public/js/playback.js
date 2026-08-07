@@ -420,7 +420,32 @@ function playCurrent() {
   // web, load() resolves synchronously in practice (plain audioEl.src
   // assignment, no real async work), so this preserves the exact previous
   // timing there.
-  NativeAudioAdapter.load(`/api/stream?path=${encodeURIComponent(track.path)}`, loadMeta).then(safePlay);
+  // BUG FIX (found via Logcat): NativeAudio's Android implementation parses
+  // assetPath as a URI and requires an explicit scheme (http/https/file) -
+  // a server-relative path like "/api/stream?path=..." has no scheme at
+  // all, which is exactly what threw "unexpected URI scheme 'null'" here.
+  // audioEl.src on web tolerates a relative path fine (the browser resolves
+  // it against the page's own origin automatically), which is why this
+  // wasn't caught until testing on native specifically. Using
+  // location.origin here matches what the artworkUrl above already did
+  // correctly.
+  const streamUrl = `${location.origin}/api/stream?path=${encodeURIComponent(track.path)}`;
+  NativeAudioAdapter.load(streamUrl, loadMeta)
+    .then(safePlay)
+    .catch(err => {
+      // A failed load() (e.g. native preload() rejecting - see
+      // native-audio-adapter.js) previously vanished silently here: nothing
+      // caught it, so safePlay() never ran, but nothing reset the UI back
+      // to a "not playing" state either - the play/pause icon stayed
+      // wherever setPlayPauseIcon last visually put it, timer stuck at
+      // 0:00, with no visible error or way to tell what happened. This
+      // still doesn't attempt a retry (a real gap - a flaky network blip
+      // on one track currently just fails that track), but at minimum
+      // surfaces the failure and leaves the UI in a state that matches
+      // reality instead of lying that playback is active.
+      console.error('[playCurrent] failed to load track:', track.path, err);
+      setPlayPauseIcon(false);
+    });
   nativeCurrentTimeSec = 0;
   nativeDurationSec = NaN;
   seekBarEl.value = 0;

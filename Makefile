@@ -11,6 +11,7 @@
 #   make android          # open project in Android Studio
 #   make ios              # open project in Xcode (macOS only)
 #   make build-apk        # build a debug APK from the command line
+#   make install-apk       # build + install straight onto a USB-connected Android phone via adb
 #   make run-ios           # build + run on a connected iPhone or simulator (macOS only)
 #   make emulator-create    # download an Android system image + create a test AVD (no Mac needed)
 #   make emulator-run        # boot the AVD (leave running in its own terminal)
@@ -47,6 +48,15 @@ APP_NAME     ?= Vibing
 WEB_DIR      ?= public
 ANDROID_SDK_ROOT ?= $(HOME)/android-sdk
 CMDLINE_TOOLS_VERSION ?= 11076708
+# Platform 36 / Build-Tools 35.0.0: matches what Capacitor's generated
+# android/ Gradle config actually requested when this was last tested
+# (Gradle auto-installed these mid-build when only 34/34.0.0 were
+# preinstalled). Installing them up front here avoids that mid-build
+# download + license-acceptance detour. If a future `npx cap add android`
+# or Capacitor upgrade requests different versions, override on the command
+# line, e.g.: make setup ANDROID_PLATFORM=37 ANDROID_BUILD_TOOLS=36.0.0
+ANDROID_PLATFORM ?= 36
+ANDROID_BUILD_TOOLS ?= 35.0.0
 NODE_MIN_MAJOR := 22
 AVD_NAME       ?= Vibing_Test
 AVD_API_LEVEL  ?= 34
@@ -55,7 +65,7 @@ AVD_DEVICE     ?= pixel_7
 
 # ---- Phony targets --------------------------------------------------------
 .PHONY: all setup npm-deps system-deps java-deps android-sdk cap-packages \
-        ios-deps init sync android ios build-apk run-ios clean doctor dev-env \
+        ios-deps init sync android ios build-apk install-apk run-ios clean doctor dev-env \
         emulator-deps emulator-create emulator-run emulator-list emulator-delete
 
 all: setup init
@@ -94,12 +104,14 @@ system-deps:
 # Java (required by Android Gradle build)
 # ---------------------------------------------------------------------------
 java-deps:
-	@echo ">> Checking Java (OpenJDK 17)..."
-	@if ! command -v java >/dev/null 2>&1; then \
+	@echo ">> Checking Java (OpenJDK 21 - required by current Capacitor/Gradle toolchain configs)..."
+	@JAVA_MAJOR=$$(java -version 2>&1 | head -1 | grep -oE '"[0-9]+' | tr -d '"' || echo 0); \
+	if ! command -v java >/dev/null 2>&1 || [ "$$JAVA_MAJOR" -lt 21 ]; then \
 		if command -v apt-get >/dev/null 2>&1; then \
-			sudo apt-get install -y openjdk-17-jdk; \
+			sudo apt-get install -y openjdk-21-jdk; \
+			sudo update-alternatives --set java $$(update-alternatives --list java | grep java-21) 2>/dev/null || true; \
 		elif command -v brew >/dev/null 2>&1; then \
-			brew install openjdk@17; \
+			brew install openjdk@21; \
 		fi; \
 	fi
 	@java -version
@@ -126,8 +138,8 @@ android-sdk:
 	yes | sdkmanager --sdk_root="$(ANDROID_SDK_ROOT)" --licenses >/dev/null 2>&1 || true; \
 	sdkmanager --sdk_root="$(ANDROID_SDK_ROOT)" \
 		"platform-tools" \
-		"platforms;android-34" \
-		"build-tools;34.0.0"
+		"platforms;android-$(ANDROID_PLATFORM)" \
+		"build-tools;$(ANDROID_BUILD_TOOLS)"
 	@echo ""
 	@echo ">> Add these to your shell profile (~/.bashrc or ~/.zshrc) to persist:"
 	@echo "   export ANDROID_SDK_ROOT=$(ANDROID_SDK_ROOT)"
@@ -357,6 +369,39 @@ build-apk: sync
 	cd android && ./gradlew assembleDebug
 	@echo ""
 	@echo "✅  APK built: android/app/build/outputs/apk/debug/app-debug.apk"
+
+# ---------------------------------------------------------------------------
+# Install the built debug APK straight onto a USB-connected Android phone
+# via adb, skipping any manual file transfer.
+#
+# Requires: USB debugging enabled on the phone (Settings > About phone > tap
+# "Build number" 7 times to unlock Developer Options, then Settings >
+# Developer Options > USB debugging), phone connected via USB, and "Allow
+# USB debugging?" accepted on the phone's own screen the first time adb
+# talks to it (a one-time confirmation dialog - if this target hangs, check
+# the phone screen for that prompt).
+#
+# adb comes from platform-tools, already installed by `make android-sdk`
+# (part of `make setup`) - no separate install needed.
+# ---------------------------------------------------------------------------
+install-apk: build-apk
+	@export PATH="$(ANDROID_SDK_ROOT)/platform-tools:$$PATH"; \
+	DEVICE_COUNT=$$(adb devices | grep -c "device$$"); \
+	if [ "$$DEVICE_COUNT" -eq 0 ]; then \
+		echo ""; \
+		echo "‼️  No Android device detected by adb."; \
+		echo "    - Check the phone is connected via USB"; \
+		echo "    - Check USB debugging is enabled (Settings > Developer Options)"; \
+		echo "    - Check the phone screen for an 'Allow USB debugging?' prompt"; \
+		echo "    - Run 'adb devices' yourself to see raw status"; \
+		echo ""; \
+		exit 1; \
+	fi; \
+	echo ">> Installing onto connected device..."; \
+	adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+	@echo ""
+	@echo "✅  Installed. Look for 'Vibing' on the phone's home screen / app drawer."
+	@echo ""
 
 # ---------------------------------------------------------------------------
 # Android emulator, no Android Studio GUI or Mac needed.

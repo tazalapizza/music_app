@@ -121,23 +121,86 @@ function setMuteIcon(isMuted) {
 function updateVolumeBarFill() {
   volumeBar.style.setProperty('--volume-pct', volumeBar.value + '%');
 }
-// STEP 1: this is the actual point of the native-audio migration - iOS
-// Safari/WKWebView silently ignores audioEl.volume entirely (a longstanding
-// Apple platform restriction, not a bug in this app - see the long comment
-// at the top of native-audio-adapter.js). NativeAudioAdapter.setVolume()
-// routes to the real native player's volume on iOS/Android, and falls back
-// to plain audioEl.volume on web, so this one call site now works correctly
-// on every platform.
+// The volume slider has two possible backends now:
+//   - Android: SystemVolumeAdapter - the REAL device system volume (same
+//     value the physical buttons move), via a small local Capacitor plugin
+//     (SystemVolumePlugin.java). This is what makes the slider behave like
+//     Documents/Spotify's embedded volume control, per the user's request.
+//   - iOS and web: NativeAudioAdapter's app-level volume, unchanged from
+//     the original native-audio migration (see native-audio-adapter.js).
+//     iOS has no code-level API to set system volume at all (confirmed via
+//     Apple's own developer forums) - the only sanctioned mechanism is
+//     embedding MPVolumeView, a native UI widget with its own gesture
+//     handling, which is a separate native-Swift task, not something this
+//     JS slider can drive. Until that's built, iOS keeps the same
+//     app-level-gain behavior it's had since Step 1.
+//
+// NativeAudioAdapter.setVolume() is NOT removed or bypassed when
+// SystemVolumeAdapter is active - it stays wired up (currently at its
+// neutral 1.0 default from the user's perspective) since it's what
+// ReplayGain uses to attenuate individual tracks (see state.js's
+// applyReplayGain). System volume and app-level gain are complementary,
+// stacked controls, not alternatives to each other - see the project's
+// volume-architecture notes for the full reasoning.
+const useSystemVolume = SystemVolumeAdapter.isSupported();
+
 volumeBar.addEventListener('input', (e) => {
-  NativeAudioAdapter.setVolume(e.target.value / 100);
-  NativeAudioAdapter.setMuted(false);
+  const frac = e.target.value / 100;
+  if (useSystemVolume) {
+    SystemVolumeAdapter.setVolume(frac);
+  } else {
+    NativeAudioAdapter.setVolume(frac);
+    NativeAudioAdapter.setMuted(false);
+  }
   setMuteIcon(e.target.value == 0);
   updateVolumeBarFill();
 });
 muteBtn.addEventListener('click', () => {
-  NativeAudioAdapter.setMuted(!NativeAudioAdapter.muted());
-  setMuteIcon(NativeAudioAdapter.muted());
+  if (useSystemVolume) {
+    // No separate "system mute" concept exposed here - mute is
+    // implemented as "remember the current level, drop to 0, restore on
+    // unmute" so the mute button behaves the same way regardless of which
+    // backend is active, rather than needing two different mental models.
+    if (volumeBar.dataset.preMuteValue) {
+      const restored = volumeBar.dataset.preMuteValue;
+      delete volumeBar.dataset.preMuteValue;
+      volumeBar.value = restored;
+      SystemVolumeAdapter.setVolume(restored / 100);
+      setMuteIcon(false);
+    } else {
+      volumeBar.dataset.preMuteValue = volumeBar.value;
+      volumeBar.value = 0;
+      SystemVolumeAdapter.setVolume(0);
+      setMuteIcon(true);
+    }
+    updateVolumeBarFill();
+  } else {
+    NativeAudioAdapter.setMuted(!NativeAudioAdapter.muted());
+    setMuteIcon(NativeAudioAdapter.muted());
+  }
 });
+
+if (useSystemVolume) {
+  // Initial sync: reflect the device's actual current volume in the
+  // slider on load, rather than showing some default/stale value that
+  // doesn't match reality until the user first touches the slider.
+  SystemVolumeAdapter.getVolume().then(vol => {
+    if (vol === null) return;
+    volumeBar.value = Math.round(vol * 100);
+    setMuteIcon(vol === 0);
+    updateVolumeBarFill();
+  });
+  // Live sync: if the user presses the PHYSICAL volume buttons while the
+  // app is open, reflect that in the slider too - this is what makes the
+  // in-app control feel like a real embedded system control rather than
+  // an independent one that silently drifts out of sync the moment
+  // hardware buttons are used.
+  SystemVolumeAdapter.onVolumeChanged((vol) => {
+    volumeBar.value = Math.round(vol * 100);
+    setMuteIcon(vol === 0);
+    updateVolumeBarFill();
+  });
+}
 updateVolumeBarFill();
 
 document.getElementById('openFolderBtn').addEventListener('click', () => {
@@ -179,4 +242,3 @@ document.getElementById('deleteTrackBtn').addEventListener('click', async () => 
     browse(currentPath, { keepSort: true });
   }
 });
-

@@ -64,6 +64,7 @@ const NativeAudioAdapter = (() => {
   let cachedDuration = NaN; // seconds; kept fresh by the currentTime event below (it carries duration isn't included, so this still comes from load()'s getDuration() call, but is also corrected opportunistically if a later call surfaces a better value)
   let liveCurrentTime = 0;  // seconds; kept fresh by the 'currentTime' event, pushed ~every 100ms while playing - see bindNativeListenersOnce
   let listenersBound = false;
+  let seekInFlight = false; // guards against a 'complete' event fired as a side-effect of setCurrentTime() itself (some native players briefly stop/restart internally to seek) being misread as the track naturally ending - see seekTo() and the 'complete' listener below
   const endedCallbacks = []; // playback.js registers its 'track finished' handler here on native
   const playStartedCallbacks = []; // fired from play() on native - the equivalent of audioEl's 'play' event, for consumers with no other native hook
   const timeUpdateCallbacks = []; // fired on every native 'currentTime' event - the equivalent of audioEl's 'timeupdate' event
@@ -93,6 +94,13 @@ const NativeAudioAdapter = (() => {
     listenersBound = true;
 
     plugin.addListener('complete', () => {
+      // See seekInFlight's declaration above: some native audio engines
+      // internally stop/reload to perform a seek, which can surface as a
+      // 'complete' event even though the track didn't actually finish -
+      // ignoring completions that land during a seek avoids misreading
+      // that as "track ended" and incorrectly flipping paused()/the
+      // play-pause icon or auto-advancing the queue.
+      if (seekInFlight) return;
       nativePlaying = false;
       endedCallbacks.forEach(cb => { try { cb(); } catch {} });
     });
@@ -180,7 +188,19 @@ const NativeAudioAdapter = (() => {
     if (meta && (meta.title || meta.artist || meta.album || meta.artworkUrl)) {
       preloadOpts.notificationMetadata = meta;
     }
-    await plugin.preload(preloadOpts);
+    try {
+      await plugin.preload(preloadOpts);
+    } catch (err) {
+      // A failed preload() previously left this whole load() promise
+      // rejected with nothing catching it - playCurrent()'s
+      // .then(safePlay) chain would simply never run, silently leaving
+      // the UI in a "just pressed play" state (icon flipped, nothing
+      // audible, timer stuck at 0:00) with no visible error anywhere.
+      // Logging it here at minimum surfaces the real cause in
+      // Logcat/the browser console instead of failing invisibly.
+      console.error('[NativeAudioAdapter] preload() failed for', streamUrl, err);
+      throw err; // still reject - callers (playCurrent's .then(safePlay)) should not proceed as if a track loaded when it didn't
+    }
     // Duration isn't known until the native side has actually opened the
     // file/stream - fetch it once right after preload rather than lazily on
     // first getDuration() call, so the seek bar's "total time" is ready as
@@ -243,6 +263,29 @@ const NativeAudioAdapter = (() => {
     return cachedDuration;
   }
 
+  // REVISED (found via Logcat): setCurrentTime() alone was originally used
+  // here, on the assumption it was a pure seek. Logcat showed otherwise -
+  // on Android, calling setCurrentTime() genuinely stops playback as a side
+  // effect (MediaSessionService reported playbackState=STOPPED,
+  // position=0, speed=0.0 immediately after the call, not just a
+  // misleading 'complete' event on top of still-playing audio). The
+  // seekInFlight/'complete'-suppression guard above was a reasonable first
+  // attempt but was solving the wrong layer - it stopped the JS side from
+  // *reacting* to the spurious event, but did nothing to resume the
+  // *actual* native playback that had genuinely stopped, which is why the
+  // seek bar and timer visibly froze even with that guard in place.
+  //
+  // The plugin's play() method accepts an optional seek `time` (documented
+  // as "play with seek" - see the README's NativeAudio.play() signature),
+  // performing the seek and (re)starting playback in a single native call
+  // instead of two separate ones. This sidesteps the stop-as-side-effect
+  // behavior entirely, rather than trying to detect and recover from it
+  // after the fact.
+  //
+  // seekInFlight/the 'complete' guard is left in place (harmless, and a
+  // reasonable defensive backstop if some other code path ever calls
+  // setCurrentTime directly), but this function no longer uses
+  // setCurrentTime as its primary mechanism.
   async function seekTo(seconds) {
     if (!isNative()) {
       audioEl.currentTime = seconds;
@@ -251,9 +294,29 @@ const NativeAudioAdapter = (() => {
     const plugin = getPlugin();
     if (!plugin) return;
     liveCurrentTime = seconds; // update immediately rather than waiting for the next ~100ms currentTime event tick
+    seekInFlight = true;
+    const wasPlaying = nativePlaying;
     try {
-      await plugin.setCurrentTime({ assetId: ASSET_ID, time: seconds });
+      // play({assetId, time}) works whether or not playback was already
+      // running - if it was paused, this both seeks AND resumes playback,
+      // which is a real (if minor) behavior change from a "pure" seek: the
+      // old <audio>-element behavior of seeking-while-paused-stays-paused
+      // doesn't have a direct equivalent via this plugin's API. Restoring
+      // an explicit pause() immediately after for the was-paused case
+      // would reintroduce the same stop/restart churn this fix is trying
+      // to avoid, so this tradeoff (seeking always resumes playback on
+      // native) is accepted deliberately rather than worked around.
+      await plugin.play({ assetId: ASSET_ID, time: seconds });
+      nativePlaying = true;
+      if (!wasPlaying) playStartedCallbacks.forEach(cb => { try { cb(); } catch {} });
     } catch {}
+    // Small settle window: a spurious 'complete' triggered by the seek
+    // itself could in principle arrive slightly after the call above
+    // resolves, not strictly during it - 300ms is generous relative to the
+    // ~100ms currentTime event cadence, so this doesn't meaningfully delay
+    // legitimately detecting a real end-of-track completion that happens
+    // to follow soon after a seek.
+    setTimeout(() => { seekInFlight = false; }, 300);
   }
 
   // Volume: the one capability that doesn't work at all in iOS Safari/
