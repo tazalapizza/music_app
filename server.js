@@ -896,6 +896,37 @@ app.get('/api/library/artist', async (req, res) => {
   }
 });
 
+// Lists every distinct album in the library with just enough to render a
+// picker/carousel (name, representative art, year, song count) - unlike
+// /api/library/album below, this never needs a `name` and returns one row
+// per album rather than every song. Used by the mobile landscape "album
+// carousel" view (see albums-carousel.js) to populate its horizontal strip
+// without asking the client to fetch and dedupe every track in the library
+// itself just to find the distinct album set.
+app.get('/api/library/albums', async (req, res) => {
+  try {
+    const idx = await ensureLibraryIndex();
+    const albumsMap = new Map();
+    for (const [rel, e] of Object.entries(idx)) {
+      if (!e.album) continue;
+      const key = e.album.toLowerCase();
+      let a = albumsMap.get(key);
+      if (!a) {
+        a = { name: e.album, year: e.year || null, artPath: e.hasArt ? rel : null, songCount: 0 };
+        albumsMap.set(key, a);
+      }
+      a.songCount++;
+      if (!a.artPath && e.hasArt) a.artPath = rel;
+      if (!a.year && e.year) a.year = e.year;
+    }
+    const albums = [...albumsMap.values()].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+    res.json({ albums });
+  } catch (err) {
+    logIssue(`GET /api/library/albums failed: ${err.message}`);
+    res.status(400).json({ error: err.message });
+  }
+});
+
 app.get('/api/library/album', async (req, res) => {
   try {
     const rawName = (req.query.name || '').trim();

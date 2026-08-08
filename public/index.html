@@ -44,6 +44,7 @@
     <link rel="stylesheet" href="css/settings.css">
     <link rel="stylesheet" href="css/uploads.css">
     <link rel="stylesheet" href="css/responsive.css">
+    <link rel="stylesheet" href="css/landscape-albums.css">
 </head>
 <body>
   <!-- Icon sprite: symbols reused via <use> below instead of duplicating the
@@ -150,6 +151,24 @@
         <div class="tab-panel hidden" id="playlistsPanel"></div>
       </aside>
     </main>
+
+    <!-- ================= MOBILE LANDSCAPE ALBUM CAROUSEL =================
+         Phone-only, landscape-only alternate view (see responsive.css for
+         the orientation media query that shows/hides this and hides the
+         normal file-list/sidebar/bottom-nav in its place). Two stacked
+         "pages" that slide horizontally as a pair: the art-only carousel
+         (default) and the album-detail panel (info + song list), see
+         albums-carousel.js. -->
+    <div class="landscape-albums" id="landscapeAlbums">
+      <div class="landscape-albums-strip" id="landscapeAlbumsStrip"></div>
+      <div class="landscape-album-detail" id="landscapeAlbumDetail">
+        <button class="landscape-album-back" id="landscapeAlbumBack" title="Back to albums">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-chevron-left"></use></svg>
+        </button>
+        <div class="landscape-album-info" id="landscapeAlbumInfo"></div>
+        <div class="landscape-album-songs" id="landscapeAlbumSongs"></div>
+      </div>
+    </div>
 
     <nav class="bottom-nav" id="bottomNav">
       <button class="bottom-nav-btn active" data-mobile-tab="files" title="Files">
@@ -555,5 +574,6 @@
     <script src="js/settings-auth-toast-lyrics.js"></script>
     <script src="js/metadata-editor.js"></script>
     <script src="js/layout-init.js"></script>
+    <script src="js/albums-carousel.js"></script>
 </body>
 </html>

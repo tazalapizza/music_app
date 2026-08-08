@@ -1,0 +1,237 @@
+/* ---------------------------------------------------------------------------
+   landscape-albums.css — Phone landscape-only "album carousel" view: a
+   horizontal, swipeable strip of album art; tapping one opens that album's
+   info + song list. Load after responsive.css so it can safely override the
+   phone-portrait layout rules for the narrow slice of viewports where both
+   "phone width" and "landscape" are simultaneously true.
+
+   Scope: only phones in landscape, never tablets/desktop. IMPORTANT: this
+   can NOT reuse the app's existing @media (max-width: 780px) mobile
+   breakpoint (see responsive.css) as-is - that's checked against WIDTH, and
+   a phone rotated to landscape is wider than its own portrait width (a
+   modern iPhone is ~390-430px wide in portrait but ~850-930px tall-turned-
+   sideways, i.e. its viewport WIDTH in landscape, well above 780px). That
+   mismatch is exactly why this view fell through to the desktop layout
+   instead of showing at all.
+
+   The fix: check the same 780px number against HEIGHT instead of width when
+   in landscape. A phone's short edge is the same physical ~390-430px
+   regardless of which way it's held - that's what "is this a phone" should
+   really be asking, and it's also just the portrait breakpoint rotated 90
+   degrees, so 780px (the app's one existing phone-vs-not threshold) is
+   reused rather than inventing a second, different number. A landscape
+   tablet (short edge closer to 810-1024px) or a desktop window (rarely
+   short at all) won't match. Combined with touch-only (hover:none,
+   pointer:coarse, already used the same way elsewhere in this app - see
+   responsive.css) to also exclude a manually-resized desktop browser
+   window that happens to be short. */
+
+/* Unconditionally hidden outside the landscape-phone case - see
+   responsive.css section 1 for why this lives outside any @media block. */
+.landscape-albums { display: none; }
+
+@media (orientation: landscape) and (max-height: 780px) and (hover: none) and (pointer: coarse) {
+  /* ---- Swap the normal mobile shell out for the carousel ---- */
+  .content,
+  .bottom-nav,
+  .mini-player,
+  .full-player,
+  .player-blur-group {
+    display: none !important;
+  }
+
+  .landscape-albums {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    background: var(--bg-page, #121214);
+    overflow: hidden;
+  }
+
+  /* ---- Page 1: art-only horizontal carousel ---- */
+  .landscape-albums-strip {
+    height: 100%;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    padding: 0 calc(50vh - 90px) 0 calc(50vh - 90px); /* center first/last card with scroll-snap */
+    overflow-x: auto;
+    overflow-y: hidden;
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+    transition: transform 0.25s ease, opacity 0.2s ease;
+  }
+  .landscape-albums.detail-open .landscape-albums-strip {
+    transform: translateX(-4%);
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .landscape-album-card {
+    flex: 0 0 auto;
+    width: min(42vw, 220px);
+    scroll-snap-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+  }
+  .landscape-album-art {
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    border-radius: 10px;
+    object-fit: cover;
+    background: #1e1e22;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  }
+  .landscape-album-art-placeholder {
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    border-radius: 10px;
+    background: #1e1e22;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 34px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  }
+  .landscape-album-card.playing .landscape-album-art,
+  .landscape-album-card.playing .landscape-album-art-placeholder {
+    box-shadow: 0 0 0 3px var(--accent-color), 0 6px 20px rgba(0, 0, 0, 0.35);
+  }
+  .landscape-album-card-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: #e8e8ea;
+    text-align: center;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .landscape-album-card-meta {
+    font-size: 11px;
+    color: #8a8a90;
+    text-align: center;
+  }
+
+  .landscape-albums-empty {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #8a8a90;
+    font-size: 13px;
+  }
+
+  /* ---- Page 2: album detail (info + song list) ---- */
+  .landscape-album-detail {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    padding: 14px 18px calc(14px + env(safe-area-inset-bottom, 0px));
+    overflow: hidden;
+    transform: translateX(4%);
+    opacity: 0;
+    pointer-events: none;
+    transition: transform 0.25s ease, opacity 0.2s ease;
+  }
+  .landscape-albums.detail-open .landscape-album-detail {
+    transform: translateX(0);
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .landscape-album-back {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    z-index: 1;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.08);
+    color: #e8e8ea;
+    border: none;
+  }
+
+  .landscape-album-info {
+    display: flex;
+    gap: 14px;
+    align-items: center;
+    padding: 0 0 10px 40px;
+    flex: 0 0 auto;
+  }
+  .landscape-album-info-art,
+  .landscape-album-info-art-placeholder {
+    width: 64px;
+    height: 64px;
+    border-radius: 8px;
+    object-fit: cover;
+    background: #1e1e22;
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+  }
+  .landscape-album-info-text { min-width: 0; flex: 1; }
+  .landscape-album-info-name {
+    font-size: 15px;
+    font-weight: 700;
+    color: #e8e8ea;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .landscape-album-info-meta {
+    font-size: 11px;
+    color: #8a8a90;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .landscape-album-songs {
+    flex: 1;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .landscape-album-song-row {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 7px 4px;
+    font-size: 13px;
+    color: #c8c8cc;
+  }
+  .landscape-album-song-track {
+    flex: 0 0 auto;
+    width: 20px;
+    color: #7a7a80;
+    font-variant-numeric: tabular-nums;
+  }
+  .landscape-album-song-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .landscape-album-song-row.playing .landscape-album-song-title {
+    color: var(--accent-color);
+    font-weight: 700;
+  }
+  .landscape-album-song-duration {
+    flex: 0 0 auto;
+    color: #7a7a80;
+    font-variant-numeric: tabular-nums;
+  }
+}
