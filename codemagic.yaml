@@ -131,6 +131,67 @@ workflows:
           echo "--- Verifying UIBackgroundModes was written ---"
           plutil -p "$PLIST" | grep -A 3 "UIBackgroundModes" || echo "WARNING: UIBackgroundModes not found after patching!"
 
+      - name: Register SystemVolumePlugin (local plugin packageClassList fix)
+        script: |
+          set -e
+          # CONFIRMED ROOT CAUSE (matches ionic-team/capacitor discussion
+          # #8402 exactly - a local, hand-written Swift plugin in the App
+          # target, on Capacitor 8 with SPM, compiling successfully but
+          # never appearing in window.Capacitor.Plugins): Capacitor 8's SPM
+          # auto-discovery only picks up plugins that are npm packages
+          # (like @mediagrid/capacitor-native-audio, resolved via
+          # node_modules and CapApp-SPM's generated Package.swift) - it
+          # does NOT auto-discover hand-written .swift files placed
+          # directly in ios/App/App/, no matter how correctly they
+          # implement CAPPlugin/CAPBridgedPlugin. Confirmed via a real
+          # on-device test: window.Capacitor.Plugins.SystemVolume was
+          # completely absent despite SystemVolumePlugin.swift being
+          # present, compiling, and surviving the checkout (see the
+          # "Verify hand-written native files survived the checkout" step
+          # below, which already confirms the FILE itself isn't the
+          # problem).
+          #
+          # The actual registration mechanism for iOS reads a
+          # "packageClassList" array from a GENERATED, platform-specific
+          # config file at ios/App/App/capacitor.config.json (distinct from
+          # the project root's capacitor.config.json) - CapacitorBridge.swift
+          # reads this list at runtime to know which plugin classes to
+          # instantiate. "cap add ios"/"cap sync" only ever populate this
+          # list with npm-package plugins, leaving it silently missing any
+          # local plugin class names - and regenerate this file fresh every
+          # run, so a one-time manual edit (the community's documented
+          # workaround for this exact bug) would never survive our build
+          # pipeline's "wipe ios/ and start fresh" step above. Patched
+          # automatically here instead, same pattern as the Info.plist step.
+          CONFIG="ios/App/App/capacitor.config.json"
+          if [ ! -f "$CONFIG" ]; then
+            echo "ERROR: $CONFIG not found - cap add ios may have failed or changed its output location."
+            exit 1
+          fi
+          python3 - << 'PYEOF'
+          import json
+
+          config_path = "ios/App/App/capacitor.config.json"
+          plugin_class_name = "SystemVolumePlugin"
+
+          with open(config_path, "r") as f:
+              config = json.load(f)
+
+          package_class_list = config.get("packageClassList", [])
+          if plugin_class_name not in package_class_list:
+              package_class_list.append(plugin_class_name)
+              config["packageClassList"] = package_class_list
+              with open(config_path, "w") as f:
+                  json.dump(config, f, indent=2)
+              print(f"  + added {plugin_class_name!r} to packageClassList")
+          else:
+              print(f"  = {plugin_class_name!r} already present in packageClassList")
+
+          print(f"Current packageClassList: {config.get('packageClassList', [])}")
+          PYEOF
+          echo "--- Verifying packageClassList was written ---"
+          grep -A 5 "packageClassList" "$CONFIG" || echo "WARNING: packageClassList not found after patching!"
+
       - name: Verify hand-written native files survived the checkout
         script: |
           set -e
