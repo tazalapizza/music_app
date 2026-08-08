@@ -69,19 +69,28 @@
 //     returns nil/null for ANY non-whole-number value, however few decimal
 //     places it has) - this is the plugin maintainer's own documented
 //     workaround ("we round to an int on the JS side"), not a guess.
-//   - load() now only calls create() ONCE per session (the first track);
-//     every later track change uses changeAudioSource() instead of
-//     destroy()+create(). CONFIRMED root cause via direct inspection of
-//     the plugin's iOS AudioSource.swift source: destroy() never
-//     invalidates the audioReadyObservation KVO observation (only
-//     changeAudioSource() does), which - since that observation's closure
-//     captures `self` - creates a permanent Swift retain cycle on every
-//     destroy()+create() cycle. This matches a real, still-open upstream
-//     bug (discussion #48) describing this exact symptom on this exact
-//     "repeatedly switch one primary streamed track" usage pattern. Fixed
-//     entirely on our side by avoiding the leaky code path, without
-//     needing an upstream plugin fix. See load()'s own comment for the
-//     full mechanism.
+//   - THIS PACKAGE IS A FORK: package.json points @mediagrid/capacitor-
+//     native-audio at a git fork+branch (see AudioSource.swift.patch.txt),
+//     not the npm registry version. The fork's ONLY change is a corrected
+//     destroy() in ios/Sources/AudioPlayerPlugin/AudioSource.swift, which
+//     now properly invalidates the audioReadyObservation KVO observation
+//     and nils out player/playerItem/playerQueue/playerLooper - the
+//     original destroy() did none of this, creating a permanent Swift
+//     retain cycle (that observation's closure captures `self`) on every
+//     destroy()+create() cycle. Confirmed via direct source inspection and
+//     matches mediagrid/capacitor-native-audio discussion #48.
+//   - load() below uses destroy()+create() for EVERY track change (see its
+//     own long comment for the full v1/v2/v3 history) - an earlier
+//     revision tried switching to changeAudioSource() instead, to avoid
+//     the (then-unfixed) destroy() leak, but that introduced a WORSE,
+//     confirmed crash: changeAudioSource() calls
+//     player.replaceCurrentItem(with:), which crashes on iOS with
+//     SIGABRT - independently confirmed as a documented, reported
+//     Apple-level AVPlayer KVO-compliance bug (Apple Developer Forums
+//     thread 719494), not something fixable in this plugin's Swift code.
+//     Reverted back to destroy()+create() once the fork fixed the actual
+//     leak, which avoids replaceCurrentItem() entirely (create() always
+//     builds a brand-new AVPlayer).
 //
 // SEPARATELY (in playback.js, not this file): a confirmed real race was
 // found and fixed where setRate() fired synchronously right after
@@ -96,27 +105,6 @@ const NativeAudioAdapter = (() => {
   // if Capacitor hasn't loaded for some reason, so the app still works as
   // a plain web page.
   const isNative = () => (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) || false;
-
-  // TEMPORARY DIAGNOSTIC (remove once the iOS "audio doesn't start, no
-  // error" investigation is resolved): checks whether the native
-  // AudioPlayer plugin bridge actually exists at all. If it doesn't,
-  // every call in this file silently no-ops via its own `if (!plugin)
-  // return;` guards - meaning "nothing happens, no visible error" is
-  // EXACTLY what you'd see if this plugin failed to link into the native
-  // build (a known Capacitor 8 + SPM risk flagged in this project's
-  // codemagic.yaml), even though the Codemagic build itself reports
-  // success (SPM linking issues don't fail compilation, only runtime
-  // plugin availability). Uses a plain alert() rather than console.log
-  // specifically because it needs to be visible with NO Xcode/Console.app
-  // access at all - just opening the app.
-  if (isNative()) {
-    setTimeout(() => {
-      const pluginExists = !!(window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.AudioPlayer);
-      if (!pluginExists) {
-        alert('[DIAGNOSTIC] window.Capacitor.Plugins.AudioPlayer is MISSING. The native AudioPlayer plugin did not load - this points at an iOS SPM plugin-linking issue (the build succeeds, but the plugin never reaches the JS bridge). See codemagic.yaml\'s own comment on this known Capacitor 8 + SPM risk.');
-      }
-    }, 1000); // small delay so this runs after Capacitor's own plugin registration has had a chance to complete
-  }
 
   // Single fixed audioId: this app only ever plays one track at a time
   // (see queue/queueIndex in state.js), so there's no need for the
@@ -257,42 +245,42 @@ const NativeAudioAdapter = (() => {
 
   // Loads a new track. Mirrors the old `audioEl.src = ...; audioEl.play()`
   // shape used throughout playback.js, but async since mediagrid's
-  // create()/initialize()/changeAudioSource() round-trip to native code.
+  // create()/initialize() round-trip to native code.
   //
   // `meta` is optional lock-screen/Control Center Now Playing info
   // ({title, artist, album, artworkUrl}) - mapped to mediagrid's
-  // albumTitle/artistName/friendlyTitle/artworkSource fields. Omitted or
-  // partial fields are fine.
+  // albumTitle/artistName/friendlyTitle/artworkSource fields on create().
+  // Omitted or partial fields are fine.
   //
-  // MEMORY LEAK FIX (found by reading the plugin's actual iOS Swift source
-  // directly - AudioSource.swift): the original version of this function
-  // called destroy() then create() for every track change. destroy() never
-  // invalidates audioReadyObservation (the KVO observation set up by
-  // observeAudioReady() to detect AVPlayerItem readiness) - only
-  // changeAudioSource() does that, via an explicit
-  // `audioReadyObservation?.invalidate()` call absent from destroy().
-  // Since that KVO observation's closure captures `self` (the AudioSource
-  // instance), never invalidating it creates a genuine, permanent Swift
-  // retain cycle - removing the AudioSource from the plugin's internal
-  // dictionary (which destroy()'s caller does) does NOT break this cycle,
-  // since the observation and the AudioSource keep each other alive
-  // indefinitely regardless. This matches a real, still-open upstream bug
-  // report (mediagrid/capacitor-native-audio discussion #48) describing
-  // this exact symptom on this exact usage pattern (repeatedly
-  // destroying/creating a single "primary" streamed track) - confirmed via
-  // direct source inspection, not speculation.
-  //
-  // FIX: only call create() ONCE per session, for the very first track.
-  // Every subsequent track change uses changeAudioSource() instead, which
-  // correctly invalidates the old KVO observation before setting up a new
-  // one - using the plugin's own already-correct code path instead of the
-  // leaky one. changeAudioSource() doesn't accept metadata/volume/rate in
-  // the same call (unlike create()), so those are now applied via
-  // separate follow-up calls (changeMetadata(), setVolume()) every load()
-  // regardless of whether this is the first track or a later one - this
-  // was already true for metadata in the previously-uncached case (see
-  // updateMetadata()), so this isn't a new pattern, just applied more
-  // consistently now.
+  // ARCHITECTURE NOTE (this is the SECOND revision of this function's
+  // approach - read this before changing it again):
+  //   v1: destroy()+create() every track change. Worked, but leaked memory
+  //     on iOS every cycle - destroy() never invalidated audioReadyObservation
+  //     (a KVO observation whose closure captures `self`), creating a
+  //     permanent retain cycle. Confirmed via direct source inspection and
+  //     matches mediagrid/capacitor-native-audio discussion #48.
+  //   v2: switched to create() ONCE + changeAudioSource() for every later
+  //     track, to avoid the leaky destroy() path entirely. This introduced
+  //     a DIFFERENT, WORSE bug: changeAudioSource() calls
+  //     player.replaceCurrentItem(with:), which crashes on iOS with
+  //     SIGABRT/NSInternalInconsistencyException - confirmed via a real
+  //     device crash log AND independently matched to a documented,
+  //     reported Apple-level AVPlayer KVO-compliance bug (nested keypath
+  //     KVO observations aren't reliably notified across
+  //     replaceCurrentItem() calls - see Apple Developer Forums thread
+  //     719494). This is not something fixable by editing this plugin's
+  //     Swift code - it's how AVPlayer itself behaves.
+  //   v3 (current): back to destroy()+create() for every track change,
+  //     same as v1 - but now running against a FORKED, PATCHED version of
+  //     @mediagrid/capacitor-native-audio (see package.json's dependency,
+  //     pointed at a git fork+branch instead of the npm registry) whose
+  //     destroy() has been corrected to properly invalidate
+  //     audioReadyObservation and nil out player/playerItem/playerQueue/
+  //     playerLooper - see that fork's own AudioSource.swift.patch.txt for
+  //     the exact diff. This avoids v2's crash (destroy()+create() never
+  //     calls replaceCurrentItem() at all - create() always builds a
+  //     brand-new AVPlayer from scratch) while also fixing v1's leak at
+  //     its actual root, rather than working around it.
   async function load(streamUrl, meta) {
     cachedDuration = NaN;
     liveCurrentTime = 0;
@@ -305,102 +293,69 @@ const NativeAudioAdapter = (() => {
     if (!plugin) return; // shouldn't happen on native, but don't hard-crash playback if it does
     nativePlaying = false;
 
-    if (!created) {
-      // First track of the session: create() must run exactly once -
-      // changeAudioSource() (used for every later track) requires an
-      // existing source to change, it can't create the first one.
-      const createParams = {
-        audioId: AUDIO_ID,
-        audioSource: streamUrl,
-        useForNotification: true, // this is always the app's one primary/foreground track - see AUDIO_ID's own comment
-        isBackgroundMusic: false,
-        loop: false,
-        // These default to true/5s already per the plugin's own documented
-        // defaults, but set explicitly here for clarity, using this app's
-        // own configured seek intervals (settings.seekBack/seekForward,
-        // already used for keyboard/swipe-to-seek elsewhere - see
-        // metadata-editor.js and layout-init.js) so the lock-screen/
-        // notification seek buttons match whatever the user has set
-        // in-app, rather than silently using the plugin's own 5s default.
-        showSeekBackward: true,
-        showSeekForward: true,
-        seekBackwardTime: settings.seekBack,
-        seekForwardTime: settings.seekForward
-      };
-      if (meta) {
-        if (meta.title) createParams.friendlyTitle = meta.title;
-        if (meta.artist) createParams.artistName = meta.artist;
-        if (meta.album) createParams.albumTitle = meta.album;
-        if (meta.artworkUrl) createParams.artworkSource = meta.artworkUrl;
-      }
-      try {
-        await plugin.create(createParams);
-        created = true;
-      } catch (err) {
-        console.error('[NativeAudioAdapter] create() failed for', streamUrl, err);
-        throw err; // still reject - callers (playCurrent's .then(safePlay)) should not proceed as if a track loaded when it didn't
-      }
-      // BUG FIX (confirmed via Logcat: on the very first track of a
-      // session only, pressing pause was instead seeking to 0 and
-      // resuming playback - traced to handleTrackEndedNaturally() in
-      // playback.js firing spuriously, via NativeAudioAdapter's own
-      // onEnded() callback, meaning onAudioEnd was misfiring on session
-      // start). Root cause: bindNativeListenersOnce() - which registers
-      // onAudioEnd and onPlaybackStatusChange - used to run via
-      // ensureConfigured() BEFORE this create() call, meaning it
-      // registered a listener for an audioId that didn't exist on the
-      // native side YET. Whatever the native implementation does with a
-      // listener registered against a not-yet-existing audio source
-      // apparently isn't safe (likely binds to nothing, or to a stale/
-      // default state that then fires once the real source is created a
-      // moment later). This only ever affected the FIRST track of a
-      // session, since bindNativeListenersOnce() only runs once
-      // (listenersBound guard) - every later track already has a
-      // validly-bound listener from here on. Fixed by binding the
-      // listeners only AFTER create() has succeeded, so onAudioEnd is
-      // always registered against a genuinely-existing audioId.
-      bindNativeListenersOnce();
-    } else {
-      // Every subsequent track: swap the source on the SAME AudioSource
-      // instance rather than destroying and recreating it - see this
-      // function's own header comment for why this is the actual leak fix.
-      try {
-        await plugin.changeAudioSource({ audioId: AUDIO_ID, source: streamUrl });
-      } catch (err) {
-        console.error('[NativeAudioAdapter] changeAudioSource() failed for', streamUrl, err);
-        throw err;
-      }
-      // changeAudioSource() doesn't take metadata inline (unlike create()) -
-      // apply it as a separate call, same mechanism already used for the
-      // previously-uncached-metadata case (see updateMetadata() and its
-      // call site in playback.js).
-      if (meta) {
-        try {
-          await plugin.changeMetadata({
-            audioId: AUDIO_ID,
-            friendlyTitle: meta.title,
-            artistName: meta.artist,
-            albumTitle: meta.album,
-            artworkSource: meta.artworkUrl
-          });
-        } catch {}
-      }
+    // destroy() the previous source under this audioId before create()-ing
+    // a new one - mediagrid's create() is documented as creating a NEW
+    // audio source, not overwriting an existing audioId in place. Safe to
+    // call even if nothing was created yet (first track of the session);
+    // wrapped in try/catch since we have no direct confirmation destroy()
+    // no-ops gracefully on an unknown audioId the way Cap-go's unload()
+    // documented itself as doing - better to swallow a possible "nothing to
+    // destroy" error than to let it break the very first track load of a
+    // session.
+    if (created) {
+      try { await plugin.destroy({ audioId: AUDIO_ID }); } catch {}
     }
+    const createParams = {
+      audioId: AUDIO_ID,
+      audioSource: streamUrl,
+      useForNotification: true, // this is always the app's one primary/foreground track - see AUDIO_ID's own comment
+      isBackgroundMusic: false,
+      loop: false,
+      // These default to true/5s already per the plugin's own documented
+      // defaults, but set explicitly here for clarity, using this app's
+      // own configured seek intervals (settings.seekBack/seekForward,
+      // already used for keyboard/swipe-to-seek elsewhere - see
+      // metadata-editor.js and layout-init.js) so the lock-screen/
+      // notification seek buttons match whatever the user has set
+      // in-app, rather than silently using the plugin's own 5s default.
+      showSeekBackward: true,
+      showSeekForward: true,
+      seekBackwardTime: settings.seekBack,
+      seekForwardTime: settings.seekForward
+    };
+    if (meta) {
+      if (meta.title) createParams.friendlyTitle = meta.title;
+      if (meta.artist) createParams.artistName = meta.artist;
+      if (meta.album) createParams.albumTitle = meta.album;
+      if (meta.artworkUrl) createParams.artworkSource = meta.artworkUrl;
+    }
+    try {
+      await plugin.create(createParams);
+      created = true;
+    } catch (err) {
+      console.error('[NativeAudioAdapter] create() failed for', streamUrl, err);
+      throw err; // still reject - callers (playCurrent's .then(safePlay)) should not proceed as if a track loaded when it didn't
+    }
+    // BUG FIX (confirmed via Logcat: on the very first track of a
+    // session only, pressing pause was instead seeking to 0 and resuming
+    // playback - traced to handleTrackEndedNaturally() in playback.js
+    // firing spuriously via NativeAudioAdapter's own onEnded() callback,
+    // meaning onAudioEnd was misfiring on session start). Root cause:
+    // listener binding used to happen BEFORE the first create() call,
+    // meaning it registered against an audioId that didn't exist on the
+    // native side yet. Fixed by binding listeners only AFTER create() has
+    // succeeded, and only once (listenersBound guard inside this
+    // function), so onAudioEnd is always registered against a
+    // genuinely-existing audioId, and re-registering on every subsequent
+    // create() (now that destroy()+create() runs every track change
+    // again) is a harmless no-op thanks to that same guard.
+    bindNativeListenersOnce();
 
     // initialize() actually prepares/buffers the audio - registering
     // onAudioReady BEFORE calling it, per the plugin's own documented
     // ordering requirement ("Should be called after callbacks are
     // registered"), so this promise doesn't resolve before the native side
     // has actually signaled readiness.
-    //
-    // NOTE: initialize() is called for BOTH the first-track (create) path
-    // and every later (changeAudioSource) path - confirmed necessary by
-    // re-reading the plugin's own README usage examples, which always
-    // call initialize() once per prepared source regardless of how that
-    // source's audioSource was set. changeAudioSource() in the Swift
-    // source also re-runs its own readiness observation internally
-    // (observeAudioReady() is called again inside changeAudioSource()),
-    // consistent with this.
     await new Promise((resolve, reject) => {
       let settled = false;
       plugin.onAudioReady({ audioId: AUDIO_ID }, async () => {

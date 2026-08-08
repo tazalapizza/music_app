@@ -23,7 +23,7 @@
     "@capacitor/core": "^8.0.0",
     "@capacitor/android": "^8.0.0",
     "@capacitor/ios": "^8.0.0",
-    "@mediagrid/capacitor-native-audio": "^3.0.0"
+    "@mediagrid/capacitor-native-audio": "github:tazalapizza/capacitor-native-audio"
   },
   "devDependencies": {
     "@capacitor/cli": "^8.0.0"
