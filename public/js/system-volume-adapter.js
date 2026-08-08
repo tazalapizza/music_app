@@ -33,36 +33,6 @@
 const SystemVolumeAdapter = (() => {
   const isNative = () => (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) || false;
 
-  // TEMPORARY DIAGNOSTIC (remove once the iOS "volume bar not linked to
-  // device volume" investigation is resolved): mirrors the approach that
-  // successfully found the AudioPlayer plugin's missing-from-bridge issue
-  // earlier in this project. Checks whether window.Capacitor.Plugins.
-  // SystemVolume exists at all (an SPM-linking-style failure would make it
-  // silently absent, exactly like the AudioPlayer case), and if it DOES
-  // exist, actually calls getVolume()/setVolume() to surface any native-
-  // side rejection - SystemVolumePlugin.swift's own setVolume() rejects
-  // with a specific, informative error if its hidden MPVolumeView's
-  // internal UISlider was never found (see that file's installHiddenVolumeView
-  // comments), which would otherwise only be visible via Console.app/Xcode,
-  // neither of which is available for testing this right now.
-  if (isNative()) {
-    setTimeout(async () => {
-      const p = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.SystemVolume;
-      if (!p) {
-        alert('[DIAGNOSTIC] window.Capacitor.Plugins.SystemVolume is MISSING. The native SystemVolume plugin did not load - same class of issue as the earlier AudioPlayer-missing bug (likely an iOS SPM plugin-linking issue, or SystemVolumePlugin.swift not actually present/committed in this specific build).');
-        return;
-      }
-      try {
-        const { volume } = await p.getVolume();
-        alert(`[DIAGNOSTIC] SystemVolume plugin exists. getVolume() returned: ${volume}. Now trying setVolume(0.5)...`);
-        await p.setVolume({ volume: 0.5 });
-        alert('[DIAGNOSTIC] setVolume(0.5) succeeded with no error. If the physical volume did NOT change, the plugin thinks it worked but the hidden slider isn\'t actually connected to the real system volume - worth double-checking installHiddenVolumeView\'s logic in SystemVolumePlugin.swift.');
-      } catch (err) {
-        alert(`[DIAGNOSTIC] SystemVolume plugin exists but a call FAILED: ${JSON.stringify(err)}. This matches SystemVolumePlugin.swift's own error message if its hidden MPVolumeView's UISlider was never found - see that file's installHiddenVolumeView() comments.`);
-      }
-    }, 1500); // slightly after the AudioPlayer diagnostic's own 1000ms, so the two alerts don't overlap/race if both fire
-  }
-
   let plugin = null;
   function getPlugin() {
     if (!plugin) {
