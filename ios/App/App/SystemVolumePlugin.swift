@@ -163,13 +163,20 @@ public class SystemVolumePlugin: CAPPlugin, CAPBridgedPlugin {
         )
     }
 
-    public override func handleOnDestroy() {
+    // BUG FIX (confirmed via a real Xcode compile error): CAPPlugin on iOS
+    // has no handleOnDestroy() method to override at all - that's an
+    // Android-only method on Capacitor's Android Plugin base class. This
+    // was a genuine mistake, not a build/registration issue - confirmed by
+    // Capacitor's own official "Building a Capacitor Plugin" documentation,
+    // which uses Swift's native deinit for exactly this kind of cleanup
+    // instead (see their ScreenOrientation plugin tutorial, which tears
+    // down a NotificationCenter observer in deinit the same way this
+    // teardown removes an AVAudioSession KVO observer here).
+    deinit {
         if isObserving {
             AVAudioSession.sharedInstance().removeObserver(self, forKeyPath: "outputVolume")
-            isObserving = false
         }
         hiddenVolumeView?.removeFromSuperview()
-        super.handleOnDestroy()
     }
 
     public override func observeValue(
