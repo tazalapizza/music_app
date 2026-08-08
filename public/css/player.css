@@ -216,7 +216,7 @@
   min-width: 60px;
   --played-pct: 0%;
   --buffered-pct: 0%;
-  background: linear-gradient(to right,
+  --track-gradient: linear-gradient(to right,
     var(--accent-color) 0%, var(--accent-color) var(--played-pct),
     rgba(255,255,255,0.22) var(--played-pct), rgba(255,255,255,0.22) var(--buffered-pct),
     #35353a var(--buffered-pct), #35353a 100%);
@@ -224,20 +224,33 @@
 #volumeBar {
   width: 80px;
   --volume-pct: 0%;
-  background: linear-gradient(to right, var(--accent-color) 0%, var(--accent-color) var(--volume-pct), #35353a var(--volume-pct), #35353a 100%);
+  --track-gradient: linear-gradient(to right, var(--accent-color) 0%, var(--accent-color) var(--volume-pct), #35353a var(--volume-pct), #35353a 100%);
 }
 input[type="range"] {
   -webkit-appearance: none;
   appearance: none;
-  height: 4px;
-  background: #35353a;
-  border-radius: 2px;
+  /* Click/drag hit-area only - NOT the visible track height. The actual
+     colored line lives on the ::-webkit-slider-runnable-track/
+     ::-moz-range-track pseudo-elements below, pinned to a real 4px
+     regardless of this box's own height; this element itself stays
+     background:transparent so growing IT taller (to make it easier to
+     click/tap precisely) doesn't visually thicken the bar at all - only
+     the invisible margin around the thin painted line grows. An earlier
+     attempt tried to keep the gradient on this element directly with
+     background-clip:content-box to crop it back down to size, but
+     -webkit-appearance:none inputs' background painting doesn't reliably
+     respect background-clip the way normal elements do (confirmed via
+     screenshot - the fill rendered at the full padded height, not
+     cropped) - moving the gradient onto the track pseudo-element instead
+     sidesteps that entirely. */
+  height: 20px;
+  background: transparent;
   outline: none;
   cursor: pointer;
 }
 input[type="range"]::-webkit-slider-runnable-track {
   height: 4px;
-  background: transparent;
+  background: var(--track-gradient, #35353a);
   border-radius: 2px;
 }
 input[type="range"]::-webkit-slider-thumb {
@@ -247,17 +260,15 @@ input[type="range"]::-webkit-slider-thumb {
   height: 12px;
   border-radius: 50%;
   background: var(--accent-color);
+  /* Half the runnable-track's 4px height minus half the thumb's own 12px
+     height, negative, centers the thumb vertically on the track - this
+     math is independent of the outer input's own (now taller) box. */
   margin-top: -4px;
   cursor: pointer;
 }
 input[type="range"]::-moz-range-track {
   height: 4px;
-  background: transparent;
-  border-radius: 2px;
-}
-input[type="range"]::-moz-range-progress {
-  height: 4px;
-  background: var(--accent-color);
+  background: var(--track-gradient, #35353a);
   border-radius: 2px;
 }
 input[type="range"]::-moz-range-thumb {
@@ -268,17 +279,20 @@ input[type="range"]::-moz-range-thumb {
   background: var(--accent-color);
   cursor: pointer;
 }
-#seekBar::-webkit-slider-thumb, #volumeBar::-webkit-slider-thumb { background: var(--accent-color); }
-#seekBar::-moz-range-progress, #volumeBar::-moz-range-progress { background: var(--accent-color); }
-#seekBar::-moz-range-thumb, #volumeBar::-moz-range-thumb { background: var(--accent-color); }
 /* Seek bars (not volume) lose their draggable-looking dot — the filled
    track itself already communicates progress, and the whole bar is still
    click/drag-seekable via its own listeners regardless of whether a thumb
-   is rendered on top of it. */
-#seekBar::-webkit-slider-thumb { width: 0; height: 0; opacity: 0; }
-#seekBar::-moz-range-thumb { width: 0; height: 0; opacity: 0; }
+   is rendered on top of it. Sized to a real (invisible) hit area rather
+   than 0 for the same reason #fpSeekBar's mobile thumb is (see
+   responsive.css) - a mouse can drag a range input from anywhere on the
+   track regardless of thumb size, so this was never visually broken on
+   desktop, but a zero-size thumb is still worse for precise clicking
+   than a real, just-invisible one sitting under the cursor at the exact
+   played position. */
+#seekBar::-webkit-slider-thumb { width: 16px; height: 16px; opacity: 0; }
+#seekBar::-moz-range-thumb { width: 16px; height: 16px; opacity: 0; }
 /* Same treatment for the volume bar's dot — the filled track already
    shows the level, and it's still click/drag-adjustable via the input's
    own events regardless of the thumb's visibility. */
-#volumeBar::-webkit-slider-thumb { width: 0; height: 0; opacity: 0; }
-#volumeBar::-moz-range-thumb { width: 0; height: 0; opacity: 0; }
+#volumeBar::-webkit-slider-thumb { width: 16px; height: 16px; opacity: 0; }
+#volumeBar::-moz-range-thumb { width: 16px; height: 16px; opacity: 0; }

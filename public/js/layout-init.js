@@ -622,6 +622,21 @@ miniPlayerEl.addEventListener('click', (e) => {
     dragging = true;
     playerBarEl.classList.add('dragging');
     blurGroupEl.classList.add('dragging');
+    // Without this, pointermove/pointerup are hit-tested against whatever
+    // element is currently under the finger on each move, not locked to
+    // the element the gesture started on - on a real touchscreen (as
+    // opposed to a straight synthetic drag) even small movement can cross
+    // over the art image, a row boundary, or other nested elements inside
+    // #playerBar, at which point the browser can stop delivering move
+    // events to this listener the same way, making the drag stall or feel
+    // like it "doesn't work" partway through. setPointerCapture pins all
+    // subsequent events for this pointerId to e.target (still inside
+    // #playerBar, since the closest() exclusion above already returned
+    // early for anything that shouldn't be captured this way) regardless
+    // of what it moves over next.
+    if (e.target.setPointerCapture) {
+      try { e.target.setPointerCapture(e.pointerId); } catch (err) { /* target may not support capture (e.g. SVG in older WebViews) - drag still works, just without the above guarantee */ }
+    }
   }
   function onPointerMove(e) {
     if (!dragging || startY === null) return;
@@ -980,8 +995,26 @@ function updateFpTimeDisplay() {
   // these two custom properties (see player.css), set as inline styles on
   // the real #seekBar by playback.js — mirrored here since #fpSeekBar is a
   // different element and wouldn't otherwise pick them up.
-  fpSeekBar.style.setProperty('--played-pct', seekBarEl.style.getPropertyValue('--played-pct') || '0%');
-  fpSeekBar.style.setProperty('--buffered-pct', seekBarEl.style.getPropertyValue('--buffered-pct') || '0%');
+  //
+  // While actively dragging (seekDragging, set in playback.js on
+  // #seekBar's own pointerdown - true here too since fpSeekBar's 'input'
+  // handler below dispatches through to #seekBar), #seekBar's own
+  // --played-pct is NOT a reliable source to mirror from: it only gets
+  // updated by updateSeekBarVisual(), which itself is only driven by the
+  // playback seek loop (play/pause-gated) or audio timeupdate events -
+  // none of which fire from a drag alone, and NONE of which fire at all
+  // while paused. Mirroring it during a paused drag was overwriting the
+  // correct, just-set value (from fpSeekBar's own 'input' handler, right
+  // before this function is called) with that stale, pre-drag position on
+  // every single call - the value moved for one frame, then visually
+  // snapped back, which is exactly the "doesn't move until I press play"
+  // symptom (play finally forced a real timeupdate that let a correct
+  // value through). Skipping the mirror during an active drag leaves
+  // fpSeekBar's own already-correct --played-pct alone instead.
+  if (!seekDragging) {
+    fpSeekBar.style.setProperty('--played-pct', seekBarEl.style.getPropertyValue('--played-pct') || '0%');
+    fpSeekBar.style.setProperty('--buffered-pct', seekBarEl.style.getPropertyValue('--buffered-pct') || '0%');
+  }
 }
 audioEl.addEventListener('timeupdate', updateFpTimeDisplay);
 audioEl.addEventListener('loadedmetadata', updateFpTimeDisplay);
@@ -993,6 +1026,7 @@ NativeAudioAdapter.onEnded(updateFpTimeDisplay); // covers the final tick when a
 // NativeAudioAdapter's 'currentTime' event instead (fires ~100ms while
 // playing, pushed by the plugin - see native-audio-adapter.js).
 NativeAudioAdapter.onTimeUpdate(updateFpTimeDisplay);
+fpSeekBar.addEventListener('pointerdown', () => { seekDragging = true; });
 fpSeekBar.addEventListener('input', () => {
   seekBarEl.value = fpSeekBar.value;
   seekBarEl.dispatchEvent(new Event('input', { bubbles: true }));
@@ -1000,6 +1034,7 @@ fpSeekBar.addEventListener('input', () => {
   updateFpTimeDisplay();
 });
 fpSeekBar.addEventListener('change', () => {
+  seekDragging = false;
   seekBarEl.dispatchEvent(new Event('change', { bubbles: true }));
 });
 
@@ -1092,9 +1127,9 @@ mirrorButton(document.getElementById('fpShuffleBtn'), document.getElementById('s
     const revealFrac = Math.abs(offset) / MAX_DRAG;
     if (revealFrac < TRIGGER_THRESHOLD) return;
     if (offset < 0) {
-      NativeAudioAdapter.seekTo(Math.min(durationSec(), currentTimeSec() + settings.seekForward));
+      seekToAndSync(Math.min(durationSec(), currentTimeSec() + settings.seekForward));
     } else {
-      NativeAudioAdapter.seekTo(Math.max(0, currentTimeSec() - settings.seekBack));
+      seekToAndSync(Math.max(0, currentTimeSec() - settings.seekBack));
     }
   }
 
@@ -1383,7 +1418,7 @@ if ('mediaSession' in navigator) {
       // only on release — setting currentTime on every intermediate event
       // is fine for a plain <audio> element (no extra buffering cost like
       // <video>), so no special-casing needed there.
-      NativeAudioAdapter.seekTo(details.seekTime);
+      seekToAndSync(details.seekTime);
     });
   }
   registerMediaSessionActionHandlers();

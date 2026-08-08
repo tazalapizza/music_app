@@ -751,20 +751,64 @@
   #fpSeekBar {
     width: 100%;
     margin: 0;
+    /* Without this, the parent sheet's overflow-y:auto scroll (see
+       .player-blur-group.expanded above) competes with dragging the thumb:
+       the browser treats an initial vertical wobble in the touch as an
+       intent to scroll the page instead of slide the input, so holding
+       and sliding along the bar doesn't reliably track the finger. Same
+       fix as #playerBar.player-bar's touch-action: none, just scoped to
+       the slider itself so page scroll still works everywhere else in
+       the expanded sheet. */
+    touch-action: none;
+    /* A range input's THUMB - not the track - is what the OS actually
+       hit-tests to start a native touch drag. A mouse can still drag from
+       anywhere on the track (that's a separate, mouse-only interaction
+       the browser supports), which is why this looked fine in desktop
+       responsive view - but on a real touchscreen, a zero-size thumb (see
+       the width:0/height:0 rule this used to have, further down) gives
+       the OS nothing to grab: touching the track is read as a single
+       tap-to-jump, applied only on release, with nothing to actually
+       track while held - exactly "moves only after I lift my finger".
+       --thumb-hit is a real, generously-sized (44px, the standard mobile
+       touch-target minimum) invisible hit area instead - kept invisible
+       via opacity:0 alone (NOT width/height:0, which would recreate the
+       exact bug this is fixing) so it still has real, touchable geometry
+       for the OS to grab onto and drag continuously. */
+    --thumb-hit: 44px;
     --played-pct: 0%;
     --buffered-pct: 0%;
-    background: linear-gradient(to right,
+    /* --track-gradient, not a direct background here - the base
+       input[type="range"] rule (player.css) keeps this element's own
+       background transparent and paints the visible line on the much
+       thinner ::-webkit-slider-runnable-track/::-moz-range-track pseudo-
+       elements instead, so growing this element's height for a bigger
+       tap target (also from that same base rule) doesn't thicken the
+       bar's actual visible appearance - see that rule's comment for the
+       full reasoning (the background-clip approach tried first there
+       didn't work reliably on webkit inputs, which is why the gradient
+       lives on the track pseudo-element instead). */
+    --track-gradient: linear-gradient(to right,
       var(--accent-color) 0%, var(--accent-color) var(--played-pct),
       rgba(255,255,255,0.22) var(--played-pct), rgba(255,255,255,0.22) var(--buffered-pct),
       #35353a var(--buffered-pct), #35353a 100%);
   }
-  #fpSeekBar::-webkit-slider-thumb { background: var(--accent-color); }
-  #fpSeekBar::-moz-range-progress { background: var(--accent-color); }
-  #fpSeekBar::-moz-range-thumb { background: var(--accent-color); }
-  /* Same as #seekBar in player.css: no visible dot on the seek bar's
-     thumb, only on the volume bar's. */
-  #fpSeekBar::-webkit-slider-thumb { width: 0; height: 0; opacity: 0; }
-  #fpSeekBar::-moz-range-thumb { width: 0; height: 0; opacity: 0; }
+  #fpSeekBar::-webkit-slider-thumb {
+    background: var(--accent-color);
+    -webkit-appearance: none;
+    appearance: none;
+    width: var(--thumb-hit);
+    height: var(--thumb-hit);
+    border-radius: 50%;
+    opacity: 0;
+  }
+  #fpSeekBar::-moz-range-thumb {
+    background: var(--accent-color);
+    width: var(--thumb-hit);
+    height: var(--thumb-hit);
+    border-radius: 50%;
+    border: none;
+    opacity: 0;
+  }
 
   .fp-row-timers { justify-content: space-between; padding: 0 4px; font-size: 12px; color: #a8a8ae; font-variant-numeric: tabular-nums; }
 
@@ -818,14 +862,32 @@
     flex: 1;
     min-width: 0;
     margin: 0;
+    /* Same reasoning as #fpSeekBar just above: a real, invisible 44px
+       touch-target for the thumb instead of collapsing it to 0, so a
+       finger actually has something to grab to start a native drag - see
+       that block's comment for the full explanation. */
+    touch-action: none;
+    --thumb-hit: 44px;
     --volume-pct: 0%;
-    background: linear-gradient(to right, var(--accent-color) 0%, var(--accent-color) var(--volume-pct), #35353a var(--volume-pct), #35353a 100%);
+    --track-gradient: linear-gradient(to right, var(--accent-color) 0%, var(--accent-color) var(--volume-pct), #35353a var(--volume-pct), #35353a 100%);
   }
-  #fpVolumeBar::-webkit-slider-thumb { background: var(--accent-color); }
-  #fpVolumeBar::-moz-range-progress { background: var(--accent-color); }
-  #fpVolumeBar::-moz-range-thumb { background: var(--accent-color); }
-  #fpVolumeBar::-webkit-slider-thumb { width: 0; height: 0; opacity: 0; }
-  #fpVolumeBar::-moz-range-thumb { width: 0; height: 0; opacity: 0; }
+  #fpVolumeBar::-webkit-slider-thumb {
+    background: var(--accent-color);
+    -webkit-appearance: none;
+    appearance: none;
+    width: var(--thumb-hit);
+    height: var(--thumb-hit);
+    border-radius: 50%;
+    opacity: 0;
+  }
+  #fpVolumeBar::-moz-range-thumb {
+    background: var(--accent-color);
+    width: var(--thumb-hit);
+    height: var(--thumb-hit);
+    border-radius: 50%;
+    border: none;
+    opacity: 0;
+  }
 
   /* ----- Upcoming track row -----
      Same visual language as .mini-player (art/icon + title/subtitle sizes,

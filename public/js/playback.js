@@ -762,12 +762,24 @@ const blurWrap = document.querySelector('.player-blur-bg');
 const blurCanvas = document.getElementById('playerBlurCanvas');
 const blurCtx = blurCanvas ? blurCanvas.getContext('2d') : null;
 // How far the canvas overhangs each side of the visible panel, in CSS px.
-// Needs to be at least the blur radius (50px, see .player-blur-bg's filter)
-// so the blur kernel always has real painted pixels to sample from at the
-// panel's true edges, instead of mixing in empty transparent space there
-// and darkening the edge - which is what caused the "always a dark
-// fringe/black background" look before this fix.
-const BLUR_CANVAS_OVERSCAN = 70;
+// Needs to be comfortably more than the blur radius (50px, see
+// .player-blur-bg's filter) - CSS filter:blur()'s radius argument behaves
+// like a Gaussian standard deviation, not a hard cutoff, so its visible
+// falloff actually extends to roughly 2-3x the stated radius before it's
+// negligible. The previous value here (70px, under 1.5x the 50px radius)
+// left the blur's own tail still meaningfully non-negligible right at the
+// panel's true visible edge, softening/fading the color exactly at the
+// boundary - which reads as a translucent/darkened edge even though the
+// canvas underneath is fully opaque there (verified by direct pixel
+// alpha readback). 150px (3x the radius) gives the kernel a full patch of
+// real painted pixels to sample at every point up to the true edge, so
+// there's no falloff tail left inside the visible area at all.
+const BLUR_CANVAS_OVERSCAN = 150;
+// Width the canvas was actually last drawn for (set inside
+// drawBlurBackground), compared against by the ResizeObserver further
+// down this file so a redraw only happens when the container's real
+// width has actually changed since the last draw.
+let lastDrawnBlurWidth = null;
 
 // Deterministic PRNG so the same album art always reshuffles into the same
 // layout (no jarring reshuffle if this runs again for the same art).
@@ -844,6 +856,10 @@ function hueBucketOf(r, g, b) {
 function drawBlurBackground(sourceImg, seedKey) {
   if (!blurCanvas || !blurCtx || !blurWrap || !blurGroup || !sourceImg) return;
   const visibleW = blurGroup.clientWidth || 1;
+  // Recorded so the ResizeObserver below (which watches this same
+  // element) can tell a genuine width change from its own echo of the
+  // redraw this function is about to perform.
+  lastDrawnBlurWidth = visibleW;
   // Draw for the TRUE ceiling of how tall this panel could ever be - not
   // "however tall it happens to be right now". Using the current height
   // (even just when the lyrics panel happens to be open, or - on mobile -
@@ -901,8 +917,23 @@ function drawBlurBackground(sourceImg, seedKey) {
   blurWrap.style.width = `${w}px`;
   blurWrap.style.height = `${h}px`;
 
-  blurCanvas.style.left = `${-BLUR_CANVAS_OVERSCAN}px`;
-  blurCanvas.style.bottom = `${-BLUR_CANVAS_OVERSCAN}px`;
+  // #playerBlurCanvas is a CHILD of .player-blur-bg (blurWrap), not a
+  // sibling positioned independently against the same reference point -
+  // see index.html. blurWrap itself is already the oversized, negatively-
+  // offset box (left/right: -OVERSCAN above); the canvas filling it only
+  // needs left/bottom: 0 to line up with its parent's edges exactly.
+  // Repeating the same "-OVERSCAN" offset here (as this used to) applies
+  // it TWICE relative to the page - once from blurWrap's own offset, once
+  // again from the canvas's offset within blurWrap - shifting the actual
+  // drawing surface an extra OVERSCAN px further than intended. The wrap
+  // (and its background-color) still covered the resulting gap at small
+  // overscan values, but the canvas itself was never actually reaching
+  // one whole edge of its own parent box - that uncovered strip of empty/
+  // transparent canvas is exactly what the blur filter was picking up and
+  // smearing into a visible fade at the panel's true edge, worse on
+  // whichever side the doubled offset pushed the canvas away from.
+  blurCanvas.style.left = '0px';
+  blurCanvas.style.bottom = '0px';
   blurCanvas.style.top = 'auto';
   blurCanvas.style.width = `${w}px`;
   blurCanvas.style.height = `${h}px`;
@@ -1058,7 +1089,7 @@ function drawBlurBackground(sourceImg, seedKey) {
 
 let lastBlurSourceImg = null;
 let lastBlurSeedKey = null;
-window.addEventListener('resize', () => {
+function redrawBlurForResize() {
   // A real resize can change the collapsed player bar's own height (e.g.
   // orientation change, crossing the mobile breakpoint, resizing a desktop
   // window narrow enough to wrap content) - invalidate the cache so
@@ -1066,7 +1097,30 @@ window.addEventListener('resize', () => {
   // value from before the resize.
   cachedCollapsedPlayerBarH = null;
   if (lastBlurSourceImg) drawBlurBackground(lastBlurSourceImg, lastBlurSeedKey);
-});
+}
+window.addEventListener('resize', redrawBlurForResize);
+// window 'resize' alone isn't reliable on mobile PWA/native shells:
+// .player-blur-group's actual width can settle (viewport units resolving,
+// safe-area insets applying, the WebView's own chrome finishing layout)
+// AFTER drawBlurBackground's very first call already measured and drew
+// against a narrower, not-yet-settled width - all without the window
+// itself ever firing a 'resize' event, since window.innerWidth never
+// actually changed. That left the canvas permanently drawn narrower than
+// the real container, showing raw page content through uncovered strips
+// on both sides - visible on every load, not just after some later
+// resize. A ResizeObserver watches the actual container box instead of
+// the window, so it also catches this "container settled to a different
+// width than it first measured at" case - including via the callback
+// that fires immediately on observe(), which is exactly the one that
+// needs to be caught here rather than skipped, since it can already
+// disagree with whatever width the initial drawBlurBackground call used.
+if (typeof ResizeObserver !== 'undefined' && blurGroup) {
+  new ResizeObserver((entries) => {
+    const currentW = Math.round(entries[0].contentRect.width);
+    if (currentW === lastDrawnBlurWidth) return; // already drawn for this width
+    redrawBlurForResize();
+  }).observe(blurGroup);
+}
 
 function applyBlurColors(sourceImg, seedKey, accentColor) {
   const root = document.documentElement.style;
@@ -1284,6 +1338,32 @@ let nativeDurationSec = NaN;
 function currentTimeSec() { return NativeAudioAdapter.isNative() ? nativeCurrentTimeSec : audioEl.currentTime; }
 function durationSec() { return NativeAudioAdapter.isNative() ? nativeDurationSec : audioEl.duration; }
 
+// Every seek (drag, forward/back skip buttons, art slide-to-seek, restart-
+// on-previous) should go through this instead of calling
+// NativeAudioAdapter.seekTo() directly. On native, nativeCurrentTimeSec -
+// which currentTimeSec() reads, and which every seek-target calculation
+// in this file is based on (e.g. applySeek()'s "currentTimeSec() +
+// settings.seekForward" in layout-init.js) - is ONLY ever refreshed by
+// NativeAudioAdapter's pushed 'currentTime' event, which fires on a
+// ~100ms cadence WHILE PLAYING (see onTimeUpdate below). While paused,
+// nothing pushes that event, so a seek's real effect (the adapter's own
+// liveCurrentTime, updated synchronously inside seekTo() - see
+// native-audio-adapter.js) never made it back into nativeCurrentTimeSec:
+// the timer text and seek bar stayed frozen at the pre-seek position, and
+// a second forward/back tap computed its target from that same stale
+// base again instead of the just-seeked position - landing on the same
+// spot rather than advancing further. Re-reading getCurrentTime()
+// immediately after seekTo() and pushing a display refresh closes that
+// gap without needing to wait for playback to resume.
+function seekToAndSync(seconds) {
+  NativeAudioAdapter.seekTo(seconds);
+  if (NativeAudioAdapter.isNative()) {
+    nativeCurrentTimeSec = NativeAudioAdapter.getCurrentTime();
+    updateSeekDisplay();
+    if (typeof updateFpTimeDisplay === 'function') updateFpTimeDisplay();
+  }
+}
+
 function updateSeekBarVisual() {
   const duration = durationSec();
   if (!duration || !isFinite(duration)) return;
@@ -1369,7 +1449,7 @@ seekBarEl.addEventListener('pointerdown', () => { seekDragging = true; });
 seekBarEl.addEventListener('input', (e) => {
   const duration = durationSec();
   if (duration) {
-    NativeAudioAdapter.seekTo((e.target.value / 100) * duration);
+    seekToAndSync((e.target.value / 100) * duration);
   }
 });
 seekBarEl.addEventListener('change', () => { seekDragging = false; });
