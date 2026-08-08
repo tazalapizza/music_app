@@ -43,9 +43,20 @@ function attachLongPressContextMenu(row, item) {
     startX = e.clientX;
     startY = e.clientY;
     firedMenu = false;
+    delete row.dataset.longPressFiredMenu;
     clear();
     timer = setTimeout(() => {
       firedMenu = true;
+      // BUG FIX: exposed on the row itself (not just this closure's own
+      // `firedMenu`) so attachFastTapWorkaround's separate pointerup
+      // handler - which previously had no way to know a long press just
+      // fired - can also check it before running the row's play/open
+      // action. Without this, holding a row long enough to open the
+      // context menu ALSO started playback/opened the item the instant
+      // the finger lifted, since attachFastTapWorkaround's pointerup fires
+      // regardless of hold duration and only cared about movement
+      // distance, not whether a long-press menu had just been triggered.
+      row.dataset.longPressFiredMenu = 'true';
       if (navigator.vibrate) navigator.vibrate(15);
       if (selectedItems.has(item.path) && selectedItems.size > 1) {
         showMultiContextMenu(startX, startY, Array.from(selectedItems.values()));
@@ -122,6 +133,14 @@ function attachFastTapWorkaround(row, item, action) {
     if (e.pointerType === 'mouse' || !tracking) { tracking = false; return; }
     tracking = false;
     if (window.mobileSelectModeActive) return; // let the normal 'click' listener's select-mode branch handle this instead - same reasoning as handleRowClickMobileAware
+    // BUG FIX: a long press that already opened the context menu
+    // (attachLongPressContextMenu, above) should NOT also start playback/
+    // open the item the instant the finger lifts - see that function's own
+    // comment on row.dataset.longPressFiredMenu for the full story.
+    if (row.dataset.longPressFiredMenu === 'true') {
+      delete row.dataset.longPressFiredMenu;
+      return;
+    }
     action();
     // Suppress the synthetic 'click' WKWebView will still fire shortly
     // after this pointerup, so the row's action doesn't run twice (once

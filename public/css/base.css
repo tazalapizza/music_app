@@ -53,6 +53,27 @@ body {
 button, .file-row, .queue-item, .playlist-item, .tab-btn, .bottom-nav-btn,
 .crumb-label, .album-card, a { touch-action: manipulation; }
 
+/* Disable text selection app-wide - a long press anywhere (row long-press
+   for the context menu, drag-to-reorder, swipe gestures, etc.) was
+   triggering the browser's native text-selection UI (the blue highlight +
+   copy/select-all popup) instead of feeling like a native app gesture.
+   This was previously only disabled piecemeal on a few specific elements
+   (see filelist.css/responsive.css's own user-select rules) rather than
+   as a deliberate app-wide default, even though the comment above already
+   stated that as the intent. Explicitly re-enabled for genuine text-entry
+   contexts (input, textarea, and anything marked contenteditable) so
+   typing/selecting in search boxes, rename fields, metadata editor fields,
+   etc. is completely unaffected. */
+* {
+  user-select: none;
+  -webkit-user-select: none;
+}
+input, textarea, [contenteditable], [contenteditable="true"] {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+
 /* ---------------------------------------------------------------------------
    Minimal text input / textarea style — shared, global base. Previously
    there was no single foundation: .modal input and .search-input each had

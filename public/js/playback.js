@@ -457,6 +457,19 @@ function playCurrent() {
       // callback below has, just for playback itself rather than just the
       // displayed metadata - see playCurrentGeneration's own comment.
       if (myGeneration !== playCurrentGeneration) return;
+      // BUG FIX: setRate() used to fire synchronously right after this
+      // load() call was kicked off (NOT awaited - see the comment on the
+      // load() call itself for why), completely unsequenced against
+      // load()'s own destroy()/create() cycle. Confirmed via Logcat: this
+      // let setRate() land on native mid-transition - sometimes hitting
+      // the OLD track's now-destroyed player (setRate on a null Player ->
+      // NullPointerException crash), sometimes racing the NEW track's
+      // still-in-progress create() (the following setVolume call then
+      // failed too: "Audio source with ID current-track was not found").
+      // Moved here, inside load()'s .then(), so it only ever runs once
+      // the new track's create()/initialize() cycle has fully completed -
+      // same ordering guarantee safePlay() already relies on.
+      NativeAudioAdapter.setRate(speeds[speedIndex]);
       safePlay();
     })
     .catch(err => {
@@ -494,7 +507,6 @@ function playCurrent() {
     fpSeekBarEl.style.setProperty('--played-pct', '0%');
     fpSeekBarEl.style.setProperty('--buffered-pct', '0%');
   }
-  NativeAudioAdapter.setRate(speeds[speedIndex]);
   // STEP 2: on native, safePlay() is already chained onto NativeAudioAdapter
   // .load()'s promise above (to avoid the play-before-preload-finishes race)
   // - calling it again here unconditionally would double-fire play() on
@@ -614,7 +626,20 @@ function playCurrent() {
     // measuring stale/placeholder text and silently exiting instead of
     // ever animating the real title. applyReplayGain still needs to run
     // every time regardless.
-    if (!cachedMeta) applyMeta(meta);
+    if (!cachedMeta) {
+      applyMeta(meta);
+      // NEW: retroactively correct the lock-screen/notification metadata
+      // now that it's known - this track wasn't cached at load() time, so
+      // NativeAudioAdapter.load() had nothing but a generic title to give
+      // the notification. See native-audio-adapter.js's updateMetadata()
+      // for the full story on why this was previously impossible.
+      NativeAudioAdapter.updateMetadata({
+        title: meta.title || track.name,
+        artist: meta.artist,
+        album: meta.album,
+        artworkUrl: meta.hasArt ? `${location.origin}/api/art?path=${encodeURIComponent(track.path)}` : undefined
+      });
+    }
     applyReplayGain(meta.replayGainDb);
   });
   setPlayPauseIcon(true);
