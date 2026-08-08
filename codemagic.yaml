@@ -108,6 +108,61 @@ workflows:
           echo "iOS platform added. Structure:"
           ls -la ios/App/
 
+      - name: Add SystemVolumePlugin.swift to Xcode build sources
+        script: |
+          set -e
+          # CONFIRMED ROOT CAUSE (the actual missing piece, found after the
+          # packageClassList fix alone turned out to be necessary but NOT
+          # sufficient - see that step's own comment for what packageClassList
+          # does and doesn't cover): a .swift file sitting in ios/App/App/ is
+          # NOT automatically compiled into the app just because it's in that
+          # folder. Xcode's project.pbxproj needs an explicit PBXBuildFile
+          # entry (referencing a PBXFileReference) injected into the App
+          # target's PBXSourcesBuildPhase "files" array - this is what Xcode's
+          # own "New File..." UI / drag-and-drop normally does automatically,
+          # but our file was placed via git/file copy, never through Xcode's
+          # UI, so no such entry exists. "cap add ios" generates
+          # project.pbxproj from a template that has no way to know about a
+          # hand-placed file that didn't exist when the template was created
+          # - and regenerates this file completely fresh every build (see the
+          # "rm -rf ios" above), so even a one-time manual Xcode-UI fix would
+          # never survive our pipeline.
+          #
+          # Uses the xcodeproj Ruby gem (the same library CocoaPods itself is
+          # built on for this exact kind of project manipulation) to add the
+          # file reference and target membership programmatically, so this
+          # survives the fresh regeneration every single build.
+          gem list -i xcodeproj > /dev/null 2>&1 || gem install xcodeproj --no-document
+          ruby - << 'RUBYEOF'
+          require 'xcodeproj'
+
+          project_path = 'ios/App/App.xcodeproj'
+
+          project = Xcodeproj::Project.open(project_path)
+          app_target = project.targets.find { |t| t.name == 'App' }
+
+          if app_target.nil?
+            puts "ERROR: Could not find an 'App' target in #{project_path}"
+            exit 1
+          end
+
+          already_present = app_target.source_build_phase.files.any? do |bf|
+            bf.file_ref && bf.file_ref.path == 'SystemVolumePlugin.swift'
+          end
+
+          if already_present
+            puts "SystemVolumePlugin.swift is already a build source - skipping (idempotent)."
+          else
+            app_group = project.main_group['App'] || project.main_group
+            file_ref = app_group.new_reference('SystemVolumePlugin.swift')
+            app_target.add_file_references([file_ref])
+            project.save
+            puts "+ Added SystemVolumePlugin.swift to the App target's build sources."
+          end
+          RUBYEOF
+          echo "--- Verifying SystemVolumePlugin.swift is now a build source ---"
+          grep -c "SystemVolumePlugin.swift" "ios/App/App.xcodeproj/project.pbxproj" || echo "WARNING: SystemVolumePlugin.swift still not found in project.pbxproj!"
+
       - name: Patch Info.plist for background audio (mediagrid plugin requirement)
         script: |
           set -e
