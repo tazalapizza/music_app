@@ -61,11 +61,55 @@
     scroll-snap-type: x mandatory;
     -webkit-overflow-scrolling: touch;
     transition: transform 0.25s ease, opacity 0.2s ease;
+    /* Hide the native scrollbar - the alphabet bar below is the intended
+       way to navigate/scrub this strip now. Firefox + standards property
+       first, then the WebKit/Blink pseudo-element (no shared shorthand). */
+    scrollbar-width: none;
+    -ms-overflow-style: none;
   }
+  .landscape-albums-strip::-webkit-scrollbar { display: none; }
   .landscape-albums.detail-open .landscape-albums-strip {
     transform: translateX(-4%);
     opacity: 0;
     pointer-events: none;
+  }
+
+  /* ---- Horizontal A-Z quick scroll (iOS-Contacts-style index, laid out
+     along the bottom edge since the carousel it drives scrolls
+     horizontally rather than vertically) ---- */
+  .landscape-albums-alphabet {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+    z-index: 2;
+    display: flex;
+    justify-content: center;
+    gap: 2px;
+    padding: 4px 10px;
+    transition: transform 0.25s ease, opacity 0.2s ease;
+  }
+  .landscape-albums.detail-open .landscape-albums-alphabet {
+    transform: translateX(-4%);
+    opacity: 0;
+    pointer-events: none;
+  }
+  .landscape-albums-alphabet-letter {
+    flex: 1 1 0;
+    max-width: 22px;
+    text-align: center;
+    font-size: 10px;
+    font-weight: 600;
+    color: #7a7a80;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: none; /* this element owns horizontal drag - don't let the browser also try to pan/scroll on it */
+  }
+  .landscape-albums-alphabet-letter.disabled {
+    color: #46464a;
+  }
+  .landscape-albums-alphabet-letter.active {
+    color: var(--accent-color);
   }
 
   .landscape-album-card {

@@ -18,6 +18,7 @@
 
 const landscapeAlbumsEl = document.getElementById('landscapeAlbums');
 const landscapeAlbumsStripEl = document.getElementById('landscapeAlbumsStrip');
+const landscapeAlbumsAlphabetEl = document.getElementById('landscapeAlbumsAlphabet');
 const landscapeAlbumInfoEl = document.getElementById('landscapeAlbumInfo');
 const landscapeAlbumSongsEl = document.getElementById('landscapeAlbumSongs');
 const landscapeAlbumBackBtn = document.getElementById('landscapeAlbumBack');
@@ -47,10 +48,27 @@ async function ensureLandscapeAlbumsList() {
   if (landscapeAlbumsList) return landscapeAlbumsList;
   if (!landscapeAlbumsLoadPromise) {
     landscapeAlbumsLoadPromise = api('/api/library/albums')
-      .then(data => { landscapeAlbumsList = data.albums; return landscapeAlbumsList; })
+      .then(data => {
+        // Sorted alphabetically (case/diacritic-insensitive) so the A-Z
+        // quick-scroll bar's letter-to-index mapping actually lines up
+        // with what's on screen - whatever order the API returns otherwise
+        // isn't guaranteed to be alphabetical.
+        landscapeAlbumsList = [...data.albums].sort((a, b) =>
+          a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+        return landscapeAlbumsList;
+      })
       .catch(() => { landscapeAlbumsLoadPromise = null; return []; });
   }
   return landscapeAlbumsLoadPromise;
+}
+
+// First letter used for both grouping into the A-Z bar and as each album
+// card's data-letter (so the bar can highlight whichever letter is
+// currently centered). Non-letters (numbers, symbols) bucket under '#',
+// same convention as iOS Contacts/Music.
+function landscapeAlbumLetter(name) {
+  const ch = (name || '').trim().charAt(0).toUpperCase();
+  return /[A-Z]/.test(ch) ? ch : '#';
 }
 
 function landscapeAlbumArtHTML(artPath, cls, placeholderCls) {
@@ -62,10 +80,11 @@ function landscapeAlbumArtHTML(artPath, cls, placeholderCls) {
 function renderLandscapeAlbumsStrip() {
   if (!landscapeAlbumsList || !landscapeAlbumsList.length) {
     landscapeAlbumsStripEl.innerHTML = '<div class="landscape-albums-empty">No albums found</div>';
+    landscapeAlbumsAlphabetEl.innerHTML = '';
     return;
   }
   landscapeAlbumsStripEl.innerHTML = landscapeAlbumsList.map(a => `
-    <div class="landscape-album-card" data-album="${a.name}">
+    <div class="landscape-album-card" data-album="${a.name}" data-letter="${landscapeAlbumLetter(a.name)}">
       ${landscapeAlbumArtHTML(a.artPath, 'landscape-album-art', 'landscape-album-art-placeholder')}
       <div class="landscape-album-card-name">${a.name}</div>
       <div class="landscape-album-card-meta">${a.year ? a.year + ' • ' : ''}${a.songCount} song${a.songCount === 1 ? '' : 's'}</div>
@@ -74,8 +93,65 @@ function renderLandscapeAlbumsStrip() {
   landscapeAlbumsStripEl.querySelectorAll('.landscape-album-card').forEach(el => {
     el.addEventListener('click', () => openLandscapeAlbum(el.dataset.album));
   });
+  renderLandscapeAlbumsAlphabet();
   updateLandscapeAlbumsPlayingHighlight();
 }
+
+// Builds the full A-Z (+ '#') bar. Letters with no matching album are
+// still shown (for a stable, predictable layout like iOS Contacts) but
+// dimmed and inert, rather than only rendering the letters actually
+// present, which would keep shifting positions as the library changes.
+const LANDSCAPE_ALPHABET = '#ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+
+function renderLandscapeAlbumsAlphabet() {
+  const present = new Set((landscapeAlbumsList || []).map(a => landscapeAlbumLetter(a.name)));
+  landscapeAlbumsAlphabetEl.innerHTML = LANDSCAPE_ALPHABET.map(letter => `
+    <div class="landscape-albums-alphabet-letter${present.has(letter) ? '' : ' disabled'}" data-letter="${letter}">${letter}</div>
+  `).join('');
+}
+
+// Scrolls the carousel to the first card for a given letter. Called both
+// on tap and continuously while dragging across the bar.
+function jumpToLandscapeAlbumLetter(letter) {
+  const card = landscapeAlbumsStripEl.querySelector(`.landscape-album-card[data-letter="${CSS.escape(letter)}"]`);
+  if (!card) return;
+  card.scrollIntoView({ behavior: 'instant', inline: 'center', block: 'nearest' });
+  landscapeAlbumsAlphabetEl.querySelectorAll('.landscape-albums-alphabet-letter').forEach(el => {
+    el.classList.toggle('active', el.dataset.letter === letter);
+  });
+}
+
+// Resolves whichever letter cell a touch/pointer point currently sits
+// over, purely from the bar's own layout - same technique iOS Contacts
+// uses so a single continuous drag across the index scrubs through the
+// whole list without needing to lift and re-tap per letter.
+function landscapeAlphabetLetterAtPoint(clientX, clientY) {
+  const el = document.elementFromPoint(clientX, clientY);
+  const cell = el && el.closest('.landscape-albums-alphabet-letter');
+  return cell ? cell.dataset.letter : null;
+}
+
+let landscapeAlphabetScrubbing = false;
+let landscapeAlphabetLastLetter = null;
+function handleLandscapeAlphabetPoint(clientX, clientY) {
+  const letter = landscapeAlphabetLetterAtPoint(clientX, clientY);
+  if (!letter || letter === landscapeAlphabetLastLetter) return;
+  landscapeAlphabetLastLetter = letter;
+  jumpToLandscapeAlbumLetter(letter);
+}
+landscapeAlbumsAlphabetEl.addEventListener('pointerdown', (e) => {
+  landscapeAlphabetScrubbing = true;
+  landscapeAlphabetLastLetter = null;
+  landscapeAlbumsAlphabetEl.setPointerCapture(e.pointerId);
+  handleLandscapeAlphabetPoint(e.clientX, e.clientY);
+});
+landscapeAlbumsAlphabetEl.addEventListener('pointermove', (e) => {
+  if (!landscapeAlphabetScrubbing) return;
+  handleLandscapeAlphabetPoint(e.clientX, e.clientY);
+});
+['pointerup', 'pointercancel', 'pointerleave'].forEach(evt => {
+  landscapeAlbumsAlphabetEl.addEventListener(evt, () => { landscapeAlphabetScrubbing = false; });
+});
 
 // Highlights whichever album card contains the currently-playing track (if
 // any), same idea as updatePlayingHighlight() in browse.js but for cards

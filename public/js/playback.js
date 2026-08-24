@@ -391,6 +391,7 @@ function hidePlayerBar() {
   artImg.removeAttribute('src');
   artIcon.classList.remove('hidden');
   updatePlayingHighlight();
+  updateQueuePlayingIndicator(); // also clears the queue row + playlist row/header highlight (see its own comment)
 }
 
 let justEnded = false; // true after the last track ends with nothing queued to follow
