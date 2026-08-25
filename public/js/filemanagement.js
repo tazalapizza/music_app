@@ -6,7 +6,10 @@
 
 // ---------- File management ----------
 async function renameItem(item) {
-  const newName = await showModal('Rename to', fileNameOf(item.path));
+  const currentName = fileNameOf(item.path);
+  const dotIndex = currentName.lastIndexOf('.');
+  const selectRange = (!item.isDir && dotIndex > 0) ? [0, dotIndex] : null;
+  const newName = await showModal('Rename to', currentName, selectRange);
   if (newName) {
     await api('/api/rename', {
       method: 'POST', headers: {'Content-Type':'application/json'},

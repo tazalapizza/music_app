@@ -300,13 +300,17 @@ fileListWrap.addEventListener('drop', (e) => {
 });
 
 // ---------- Modal helper ----------
-function showModal(title, defaultValue = '') {
+function showModal(title, defaultValue = '', selectRange = null) {
   return new Promise((resolve) => {
     modalTitle.textContent = title;
     modalInput.value = defaultValue;
     modalOverlay.classList.remove('hidden');
     modalInput.focus();
-    modalInput.select();
+    if (selectRange) {
+      modalInput.setSelectionRange(selectRange[0], selectRange[1]);
+    } else {
+      modalInput.select();
+    }
     const cleanup = () => {
       modalOverlay.classList.add('hidden');
       document.getElementById('modalOk').onclick = null;
