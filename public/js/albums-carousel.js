@@ -95,7 +95,55 @@ function renderLandscapeAlbumsStrip() {
   });
   renderLandscapeAlbumsAlphabet();
   updateLandscapeAlbumsPlayingHighlight();
+  updateLandscapeCoverFlow();
 }
+
+// Cover flow: tilts/scales/depth-shifts each card by its distance from the
+// strip's horizontal center, so the centered album sits flat and full-size
+// while neighbors fan away in 3D (classic iTunes cover-flow look) - the
+// scroll-snap behavior above already does the paging, this just reacts to
+// wherever the strip currently is scrolled to.
+let landscapeCoverFlowRAF = null;
+function updateLandscapeCoverFlow() {
+  landscapeCoverFlowRAF = null;
+  const stripRect = landscapeAlbumsStripEl.getBoundingClientRect();
+  if (!stripRect.width) return;
+  const centerX = stripRect.left + stripRect.width / 2;
+  landscapeAlbumsStripEl.querySelectorAll('.landscape-album-card').forEach(card => {
+    const cardRect = card.getBoundingClientRect();
+    const cardCenterX = cardRect.left + cardRect.width / 2;
+    // Normalized by card width (not strip width) so the tilt is consistent
+    // regardless of screen size - 1.0 means "one card-width away from center".
+    const offset = (cardCenterX - centerX) / cardRect.width;
+    const absOffset = Math.abs(offset);
+    const clamped = Math.max(-1, Math.min(1, offset));
+    // Like the classic iTunes cover-flow effect: the centered cover sits
+    // flat and forward; everything else snaps close to a fixed ~45deg tilt
+    // (not a shallow gradual one) and recedes further back the farther out
+    // it is, with side covers dimmed so the centered one visually pops.
+    const rotateY = clamped * -45;
+    const translateZ = -Math.min(absOffset, 3) * 60;
+    const brightness = 1 - Math.min(absOffset, 1) * 0.4;
+    card.style.transform = `translateZ(${translateZ}px) rotateY(${rotateY}deg)`;
+    card.style.filter = `brightness(${brightness})`;
+    // Cards now overlap tightly (see the negative margin above), so every
+    // card's name/meta caption would otherwise collide with its neighbors' -
+    // only the centered one's stays legible, same as real cover-flow UIs
+    // that show a single caption for whichever cover is focused.
+    const nameEl = card.querySelector('.landscape-album-card-name');
+    const metaEl = card.querySelector('.landscape-album-card-meta');
+    const textOpacity = Math.max(0, 1 - absOffset * 2.5);
+    if (nameEl) nameEl.style.opacity = String(textOpacity);
+    if (metaEl) metaEl.style.opacity = String(textOpacity);
+    card.style.zIndex = String(1000 - Math.round(absOffset * 10));
+  });
+}
+function scheduleLandscapeCoverFlow() {
+  if (landscapeCoverFlowRAF) return;
+  landscapeCoverFlowRAF = requestAnimationFrame(updateLandscapeCoverFlow);
+}
+landscapeAlbumsStripEl.addEventListener('scroll', scheduleLandscapeCoverFlow, { passive: true });
+window.addEventListener('resize', scheduleLandscapeCoverFlow);
 
 // Builds the full A-Z (+ '#') bar. Letters with no matching album are
 // still shown (for a stable, predictable layout like iOS Contacts) but
@@ -306,6 +354,11 @@ setInterval(() => {
 async function enterLandscapeAlbumsView() {
   await ensureLandscapeAlbumsList();
   renderLandscapeAlbumsStrip();
+  // The strip may have just rendered while this view was still `display:
+  // none` (e.g. loaded once already in landscape) - its cards had zero-size
+  // rects then, so re-run the layout-dependent cover-flow pass now that
+  // it's actually visible.
+  requestAnimationFrame(updateLandscapeCoverFlow);
 
   const current = getCurrentTrackPath();
   if (current && !landscapeHasEnteredOnce) {

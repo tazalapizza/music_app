@@ -54,13 +54,16 @@
     height: 100%;
     display: flex;
     align-items: center;
-    gap: 18px;
     padding: 0 calc(50vh - 90px) 0 calc(50vh - 90px); /* center first/last card with scroll-snap */
     overflow-x: auto;
     overflow-y: hidden;
     scroll-snap-type: x mandatory;
     -webkit-overflow-scrolling: touch;
     transition: transform 0.25s ease, opacity 0.2s ease;
+    /* Cover flow: cards live in 3D space and get tilted/scaled by JS
+       (updateLandscapeCoverFlow in albums-carousel.js) based on distance
+       from the strip's horizontal center as the user scrolls. */
+    perspective: 1000px;
     /* Hide the native scrollbar - the alphabet bar below is the intended
        way to navigate/scrub this strip now. Firefox + standards property
        first, then the WebKit/Blink pseudo-element (no shared shorthand). */
@@ -115,12 +118,23 @@
   .landscape-album-card {
     flex: 0 0 auto;
     width: min(42vw, 220px);
+    /* Rotated covers occupy far less visual width than their flat layout
+       box, so a tight negative margin pulls neighbors in to overlap under
+       the tilted edges instead of leaving a flat-box-sized gap between
+       them (see reference: covers stack close, only a sliver of each side
+       cover shows past the one in front of it). */
+    margin: 0 -60px;
     scroll-snap-align: center;
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 8px;
     cursor: pointer;
+    /* transform/filter are set per-frame by updateLandscapeCoverFlow() as the
+       strip scrolls. This must be the transformed element (not a descendant
+       of it) since `perspective` on the strip only projects its direct
+       children into 3D - putting the transform any deeper renders flat. */
+    will-change: transform;
   }
   .landscape-album-art {
     width: 100%;
