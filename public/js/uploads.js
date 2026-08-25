@@ -237,7 +237,8 @@ async function handleDroppedEntries(entries) {
     try {
       await api('/api/mkdir', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: currentPath, name: rel })
+        body: JSON.stringify({ path: currentPath, name: rel }),
+        retryOnAuth: false
       });
     } catch {}
   }

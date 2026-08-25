@@ -609,7 +609,8 @@ function reorderPlaylistTrack(name, tracks, fromIdx, toIdx) {
   renderPlaylists();
   api(`/api/playlists/${encodeURIComponent(name)}/reorder`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ from: fromIdx, to: toIdx })
+    body: JSON.stringify({ from: fromIdx, to: toIdx }),
+    retryOnAuth: false
   }).catch(() => loadPlaylists());
 }
 
@@ -831,7 +832,8 @@ async function moveItems(items) {
   for (const item of items) {
     await api('/api/move', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: item.path, destFolder })
+      body: JSON.stringify({ path: item.path, destFolder }),
+      retryOnAuth: false
     });
   }
   clearSelection();
@@ -842,7 +844,8 @@ async function deleteItems(items) {
   for (const item of items) {
     await api('/api/delete', {
       method: 'DELETE', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: item.path })
+      body: JSON.stringify({ path: item.path }),
+      retryOnAuth: false
     });
   }
   clearSelection();

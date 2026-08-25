@@ -42,10 +42,35 @@ const metaArtInput = document.getElementById('metaArtInput');
 const metaArtStatus = document.getElementById('metaArtStatus');
 const metaCancelBtn = document.getElementById('metaCancelBtn');
 const metaApplyBtn = document.getElementById('metaApplyBtn');
+const metaFetchMetaBtn = document.getElementById('metaFetchMetaBtn');
+const metaFetchMobileSlot = document.getElementById('metaFetchMobileSlot');
+const metaLyricsLrclibBtnEl = document.getElementById('metaLyricsLrclibBtn');
+
+// Fetch metadata sits left of LRCLIB on desktop (same row), but moves below
+// the album art buttons, centered on its own, on mobile — the two spots
+// are different flex containers so the node itself has to move, not just
+// its styling. Same matchMedia breakpoint as the rest of the mobile layout
+// (responsive.css's 780px cutoff / MOBILE_BREAKPOINT in layout-init.js).
+if (metaFetchMetaBtn && metaFetchMobileSlot && metaLyricsLrclibBtnEl) {
+  const META_FETCH_MOBILE_QUERY = window.matchMedia('(max-width: 780px)');
+  const placeMetaFetchBtn = () => {
+    if (META_FETCH_MOBILE_QUERY.matches) {
+      metaFetchMobileSlot.appendChild(metaFetchMetaBtn);
+    } else {
+      metaLyricsLrclibBtnEl.parentElement.insertBefore(metaFetchMetaBtn, metaLyricsLrclibBtnEl);
+    }
+  };
+  placeMetaFetchBtn();
+  META_FETCH_MOBILE_QUERY.addEventListener('change', placeMetaFetchBtn);
+}
 
 async function openMetadataEditor(items) {
   if (!META_EDITOR_AVAILABLE) {
     alert('The metadata editor UI failed to load (index.html/style.css appear out of date on this server). Please redeploy them alongside app.js.');
+    return;
+  }
+  if (!isAuthenticated) {
+    openLoginModal('Log in to edit metadata', () => openMetadataEditor(items));
     return;
   }
   const audioItems = items.filter(i => i.isAudio);
@@ -136,6 +161,8 @@ function renderMetaEditor() {
   document.getElementById('metaField-title').closest('.meta-row').classList.toggle('hidden', state.group);
   document.getElementById('metaField-track').closest('.meta-row').classList.toggle('hidden', state.group);
   document.getElementById('metaLyricsRow').classList.toggle('hidden', state.group);
+  metaFetchMetaBtn.classList.toggle('hidden', state.group);
+  closeMetaFetchResults();
   if (!state.group) {
     document.getElementById('metaFieldLyrics').value = state.files[state.idx].lyricsVal || '';
   }
@@ -237,6 +264,8 @@ document.addEventListener('click', (e) => {
   if (e.target.closest('.meta-field-arrow-btn')) return;
   if (e.target.closest('.meta-field-dropdown')) return;
   closeMetaFieldDropdown();
+  if (e.target.closest('#metaFetchMetaBtn') || e.target.closest('.meta-fetch-results')) return;
+  closeMetaFetchResults();
 });
 
 document.querySelectorAll('.meta-field-arrow-btn').forEach(btn => {
@@ -420,7 +449,8 @@ const META_EDITOR_AVAILABLE = !!(metaOverlay && metaGroupWrap && metaGroupChk &&
   metaArtSplit && metaArtOldImg && metaArtOldPlaceholder && metaArtNewImg &&
   metaArtUploadBtn && metaArtDeleteBtn && metaArtKeepBtn && metaArtPrevBtn && metaArtNextBtn && metaArtIndex &&
   metaArtBroadcastWrap && metaArtBroadcastChk && metaArtChangedCount && metaArtInput && metaArtStatus &&
-  metaCancelBtn && metaApplyBtn && document.getElementById('metaLyricsRow') &&
+  metaCancelBtn && metaApplyBtn && metaFetchMetaBtn && metaFetchMobileSlot &&
+  document.getElementById('metaLyricsRow') &&
   document.getElementById('metaFilenameSingleRow') && document.getElementById('metaFilenameSingle') &&
   document.getElementById('metaFieldLyrics') && document.getElementById('metaLyricsFetchBtn') &&
   document.getElementById('metaLyricsDeleteBtn') && document.getElementById('metaLyricsLrclibBtn') &&
@@ -500,6 +530,71 @@ metaLyricsFetchBtn.addEventListener('click', async () => {
   } finally {
     metaLyricsFetchBtn.disabled = false;
     metaLyricsFetchBtn.textContent = 'Fetch lyrics';
+  }
+});
+
+function closeMetaFetchResults() {
+  const existing = document.querySelector('.meta-fetch-results');
+  if (existing) existing.remove();
+}
+
+metaFetchMetaBtn.addEventListener('click', async () => {
+  if (!metaEditState || metaEditState.group) return;
+  const f = metaEditState.files[metaEditState.idx];
+  closeMetaFetchResults();
+  metaFetchMetaBtn.disabled = true;
+  metaFetchMetaBtn.style.width = metaFetchMetaBtn.offsetWidth + 'px';
+  metaFetchMetaBtn.textContent = 'Fetching...';
+  try {
+    const data = await api('/api/edit-meta/lookup', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: f.path })
+    });
+    if (!data.results || !data.results.length) {
+      showToast('No matching metadata found');
+      return;
+    }
+    const dropdown = document.createElement('div');
+    dropdown.className = 'meta-fetch-results';
+    dropdown.innerHTML = data.results.map((r, i) => {
+      const sub = [r.album, r.year].filter(Boolean).join(' • ');
+      const art = r.artThumbUrl
+        ? `<img class="meta-fetch-result-art" src="${r.artThumbUrl}" alt="">`
+        : `<div class="meta-fetch-result-art meta-fetch-result-art-placeholder"></div>`;
+      return `<div class="meta-fetch-result-item" data-i="${i}">
+        ${art}
+        <div class="meta-fetch-result-text">
+          <div class="meta-fetch-result-title">${r.title} — ${r.artist}</div>
+          <div class="meta-fetch-result-sub">${sub}</div>
+        </div>
+      </div>`;
+    }).join('');
+    dropdown.querySelectorAll('.meta-fetch-result-item').forEach(el => {
+      el.addEventListener('click', async () => {
+        const r = data.results[Number(el.dataset.i)];
+        if (r.title) { f.vals.title = r.title; document.getElementById('metaField-title').value = r.title; }
+        if (r.artist) { f.vals.artist = r.artist; document.getElementById('metaField-artist').value = r.artist; }
+        if (r.album) { f.vals.album = r.album; document.getElementById('metaField-album').value = r.album; }
+        if (r.year) { f.vals.year = r.year; document.getElementById('metaField-year').value = r.year; }
+        if (r.track) { f.vals.track = String(r.track); document.getElementById('metaField-track').value = String(r.track); }
+        closeMetaFetchResults();
+        if (r.releaseId) {
+          try {
+            const art = await api(`/api/edit-meta/lookup-art?releaseId=${encodeURIComponent(r.releaseId)}`);
+            if (metaEditState && metaEditState.files[metaEditState.idx] === f) {
+              setArtAction({ action: 'set', data: art.data, mime: art.mime });
+            }
+          } catch {} // no cover art available - leave existing art untouched
+        }
+      });
+    });
+    metaFetchMetaBtn.parentElement.insertAdjacentElement('afterend', dropdown);
+  } catch (err) {
+    showToast(err.message || 'Failed to fetch metadata');
+  } finally {
+    metaFetchMetaBtn.disabled = false;
+    metaFetchMetaBtn.textContent = 'Fetch metadata';
+    metaFetchMetaBtn.style.width = '';
   }
 });
 

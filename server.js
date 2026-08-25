@@ -1235,6 +1235,114 @@ app.post('/api/lyrics/fetch', async (req, res) => {
 });
 
 
+// Looks up tag metadata on MusicBrainz from a filename (parsed as "Artist -
+// Title") and the file's own duration, since that's often all a stray
+// download has going for it. Duration is used to rank/filter candidates
+// (recordings vary in length across releases/remasters), same idea as the
+// LRCLIB duration matching above.
+function parseArtistTitleFromFilename(name) {
+  const stem = path.basename(name, path.extname(name));
+  const idx = stem.indexOf(' - ');
+  if (idx === -1) return { artist: '', title: stem.trim() };
+  return { artist: stem.slice(0, idx).trim(), title: stem.slice(idx + 3).trim() };
+}
+
+function scoreMbResult(recording, targetDuration) {
+  let score = Number(recording.score) || 0;
+  if (targetDuration && recording.length) {
+    const diff = Math.abs(Math.round(recording.length / 1000) - targetDuration);
+    if (diff <= 1) score += 200;
+    else if (diff <= 3) score += 100;
+    else if (diff <= 8) score += 40;
+  }
+  return score;
+}
+
+app.post('/api/edit-meta/lookup', requireAuth, async (req, res) => {
+  try {
+    const rel = req.body.path;
+    const full = safeResolve(rel);
+    const mm = await import('music-metadata');
+    const parsed = await mm.parseFile(full, { duration: true, skipCovers: true });
+    const duration = parsed.format.duration ? Math.round(parsed.format.duration) : null;
+    const { artist, title } = parseArtistTitleFromFilename(rel);
+    if (!title) return res.json({ results: [] });
+
+    const query = artist
+      ? `recording:"${title}" AND artist:"${artist}"`
+      : `recording:"${title}"`;
+    const params = new URLSearchParams({ query, fmt: 'json', limit: '10' });
+    const headers = { 'User-Agent': 'musicapp/1.0 (self-hosted; https://github.com)' };
+
+    // MusicBrainz enforces a strict ~1 req/sec rate limit per IP and answers
+    // over-limit requests with 503 (not a "no results" response) - retry a
+    // couple of times with backoff rather than surfacing that as "not found".
+    let r;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      r = await fetch(`https://musicbrainz.org/ws/2/recording?${params}`, { headers });
+      if (r.status !== 503) break;
+      await new Promise(resolve => setTimeout(resolve, 800 * (attempt + 1)));
+    }
+    if (!r.ok) return res.json({ results: [] });
+    const data = await r.json();
+    const recordings = Array.isArray(data.recordings) ? data.recordings : [];
+
+    const results = recordings
+      .map(rec => {
+        const release = (rec.releases && rec.releases[0]) || null;
+        return {
+          title: rec.title || '',
+          artist: (rec['artist-credit'] || []).map(a => a.name).join(', '),
+          album: release ? release.title || '' : '',
+          releaseId: release ? release.id : null,
+          year: release && release.date ? release.date.slice(0, 4) : '',
+          track: release && release.media && release.media[0] && release.media[0].track
+            ? release.media[0].track[0].number : '',
+          durationSec: rec.length ? Math.round(rec.length / 1000) : null,
+          score: scoreMbResult(rec, duration)
+        };
+      })
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 5);
+
+    // Cover Art Archive lookups are one HTTP round-trip per release, so only
+    // done for the (already trimmed) top 5, in parallel, and never allowed to
+    // fail the whole lookup - a missing/slow cover just means no thumbnail.
+    await Promise.all(results.map(async (result) => {
+      if (!result.releaseId) return;
+      try {
+        const artRes = await fetch(`https://coverartarchive.org/release/${result.releaseId}/front-250`, { headers, redirect: 'follow' });
+        if (artRes.ok) result.artThumbUrl = artRes.url;
+      } catch {}
+    }));
+
+    res.json({ results, queried: { artist, title, duration } });
+  } catch (err) {
+    logIssue(`POST /api/edit-meta/lookup failed: ${err.message}`);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Downloads a Cover Art Archive image server-side and hands it back as
+// base64 so the browser can embed it via setArtAction() the same way as an
+// uploaded file - CAA doesn't reliably send CORS headers, so a client-side
+// fetch() of the image can't be trusted to work.
+app.get('/api/edit-meta/lookup-art', requireAuth, async (req, res) => {
+  try {
+    const releaseId = req.query.releaseId;
+    if (!/^[0-9a-f-]{36}$/i.test(releaseId || '')) return res.status(400).json({ error: 'invalid releaseId' });
+    const headers = { 'User-Agent': 'musicapp/1.0 (self-hosted; https://github.com)' };
+    const artRes = await fetch(`https://coverartarchive.org/release/${releaseId}/front`, { headers, redirect: 'follow' });
+    if (!artRes.ok) return res.status(404).json({ error: 'not found' });
+    const mime = artRes.headers.get('content-type') || 'image/jpeg';
+    const buf = Buffer.from(await artRes.arrayBuffer());
+    res.json({ data: buf.toString('base64'), mime });
+  } catch (err) {
+    logIssue(`GET /api/edit-meta/lookup-art failed: ${err.message}`);
+    res.status(400).json({ error: err.message });
+  }
+});
+
 app.post('/api/edit-meta/get', async (req, res) => {
   try {
     const paths = req.body.paths || [];

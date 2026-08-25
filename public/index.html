@@ -462,6 +462,7 @@
             <button id="metaArtKeepBtn" title="Keep current art">Reset</button>
           </div>
           <label class="meta-art-broadcast" id="metaArtBroadcastWrap" title="Apply this image to every selected file"><input type="checkbox" id="metaArtBroadcastChk"> Use this image</label>
+          <div class="meta-fetch-mobile-slot" id="metaFetchMobileSlot"></div>
           <div class="meta-art-nav">
             <button id="metaArtPrevBtn" title="Previous art"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-chevron-left"></use></svg></button>
             <span id="metaArtIndex" class="meta-art-index"></span>
@@ -486,6 +487,7 @@
         <div class="meta-lyrics-wrap">
           <textarea id="metaFieldLyrics" rows="6" placeholder="No lyrics"></textarea>
           <div class="meta-lyrics-actions">
+            <button type="button" id="metaFetchMetaBtn">Fetch metadata</button>
             <button type="button" id="metaLyricsLrclibBtn" title="Search this song on LRCLIB">LRCLIB<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg></button>
             <button type="button" id="metaLyricsFetchBtn">Fetch lyrics</button>
             <button type="button" id="metaLyricsDeleteBtn">Delete lyrics</button>

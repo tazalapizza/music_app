@@ -4,13 +4,29 @@
 // prefetchMeta). Depends on: state.js.
 // ---------------------------------------------------------------------------
 
+// retryOnAuth (default true): on a 401, most callers are a single request
+// with no side effects already committed, so it's safe to prompt login and
+// silently replay the same request once the user logs in - the caller's
+// `await api(...)` just resolves late instead of throwing, no per-call-site
+// changes needed. Pass `retryOnAuth: false` for calls made in a loop over
+// multiple items, or where local/UI state was already mutated before this
+// call (optimistic reorder, etc.) - blindly replaying those after an
+// unknown delay could redo/skip steps or race with other recovery logic.
 async function api(url, opts) {
+  const retryOnAuth = !opts || opts.retryOnAuth !== false;
   const res = await fetch(url, opts);
   if (!res.ok) {
     const err = await res.json().catch(() => ({error: res.statusText}));
     if (res.status === 401) {
       isAuthenticated = false;
       updateAuthBtn();
+      if (retryOnAuth) {
+        return new Promise((resolve, reject) => {
+          openLoginModal(err.error || 'Log in to make changes', () => {
+            api(url, opts).then(resolve, reject);
+          });
+        });
+      }
       openLoginModal(err.error || 'Log in to make changes');
     }
     throw new Error(err.error || 'Request failed');

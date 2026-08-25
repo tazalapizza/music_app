@@ -112,15 +112,19 @@ function updateAuthBtn() {
   }
 }
 
-function openLoginModal(message) {
+let loginResumeAction = null;
+
+function openLoginModal(message, onSuccess) {
   loginInput.value = '';
   loginError.textContent = message && message !== 'Log in to make changes' ? message : '';
   loginError.classList.toggle('hidden', !loginError.textContent);
   loginOverlay.classList.remove('hidden');
   loginInput.focus();
+  loginResumeAction = onSuccess || null;
 }
 function closeLoginModal() {
   loginOverlay.classList.add('hidden');
+  loginResumeAction = null;
 }
 
 async function checkAuthStatus() {
@@ -145,7 +149,9 @@ async function submitLogin() {
     if (res.ok) {
       isAuthenticated = true;
       updateAuthBtn();
+      const resume = loginResumeAction;
       closeLoginModal();
+      if (resume) resume();
     } else {
       loginError.textContent = data.error || 'Login failed';
       loginError.classList.remove('hidden');

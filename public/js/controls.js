@@ -224,7 +224,8 @@ document.getElementById('deleteTrackBtn').addEventListener('click', async () => 
   audioEl.load();
   await api('/api/delete', {
     method: 'DELETE', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ path: track.path })
+    body: JSON.stringify({ path: track.path }),
+    retryOnAuth: false
   });
   const removedRow = [...queuePanel.querySelectorAll('.queue-item')].find(row => Number(row.dataset.index) === queueIndex);
   removeFromQueueAt(queueIndex);

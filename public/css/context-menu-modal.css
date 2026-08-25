@@ -45,6 +45,7 @@
   z-index: 200;
 }
 .modal-overlay.hidden { display: none; }
+#loginOverlay { z-index: 300; }
 .modal {
   background: #26262a;
   padding: 20px;
