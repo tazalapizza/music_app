@@ -28,15 +28,15 @@ function openSettings() {
 function closeSettings() {
   const back = parseInt(seekBackInput.value, 10);
   const fwd = parseInt(seekForwardInput.value, 10);
-  settings.seekBack = isFinite(back) && back > 0 ? back : DEFAULT_SETTINGS.seekBack;
-  settings.seekForward = isFinite(fwd) && fwd > 0 ? fwd : DEFAULT_SETTINGS.seekForward;
+  settings.seekBack = isFinite(back) && back >= 0 ? Math.min(back, 60) : DEFAULT_SETTINGS.seekBack;
+  settings.seekForward = isFinite(fwd) && fwd >= 0 ? Math.min(fwd, 60) : DEFAULT_SETTINGS.seekForward;
   settings.skipDeleteConfirm = skipDeleteConfirmInput.checked;
   settings.rememberVolume = rememberVolumeInput.checked;
   const hideNonMusicChanged = settings.hideNonMusic !== hideNonMusicInput.checked;
   settings.hideNonMusic = hideNonMusicInput.checked;
   settings.replayGainEnabled = replayGainInput.checked;
   const maxItemsLoadRaw = parseInt(maxItemsLoadInput.value, 10);
-  const newMaxItemsLoad = isFinite(maxItemsLoadRaw) && maxItemsLoadRaw >= 0 ? maxItemsLoadRaw : DEFAULT_SETTINGS.maxItemsLoad;
+  const newMaxItemsLoad = isFinite(maxItemsLoadRaw) && maxItemsLoadRaw >= 0 ? Math.min(maxItemsLoadRaw, 100) : DEFAULT_SETTINGS.maxItemsLoad;
   const maxItemsLoadChanged = settings.maxItemsLoad !== newMaxItemsLoad;
   settings.maxItemsLoad = newMaxItemsLoad;
   saveSettings();
@@ -57,6 +57,19 @@ function closeSettings() {
   const track = queue[queueIndex];
   if (track) getMeta(track.path).then(meta => applyReplayGain(meta.replayGainDb));
 }
+
+function clampLimitInput(input, max) {
+  input.addEventListener('input', () => {
+    if (input.value === '') return;
+    const val = parseInt(input.value, 10);
+    if (!isFinite(val)) return;
+    if (val < 0) input.value = 0;
+    else if (val > max) input.value = max;
+  });
+}
+clampLimitInput(seekBackInput, 60);
+clampLimitInput(seekForwardInput, 60);
+clampLimitInput(maxItemsLoadInput, 100);
 
 document.getElementById('settingsBtn').addEventListener('click', openSettings);
 document.getElementById('settingsCloseBtn').addEventListener('click', closeSettings);

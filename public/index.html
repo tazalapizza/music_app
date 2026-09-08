@@ -71,6 +71,12 @@
   <div class="app">
     <header class="topbar">
       <div class="path-breadcrumb" id="breadcrumb"></div>
+      <!-- Mobile-only slot: #moveHereGroup (normally rendered inside
+           .topbar-actions, at its original desktop position - see
+           filemanagement.js) is reparented in here on mobile so it can show
+           as its own full-width row above the breadcrumb, instead of
+           squeezing into the topbar-actions row. Empty/inert on desktop. -->
+      <div id="moveHereMobileSlot" class="move-here-mobile-slot"></div>
       <div class="search-wrap">
         <button id="searchScopeBtn" class="search-scope-btn" title="Search everywhere (click to search only the current folder)"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg></button>
         <div class="search-input-wrap">
@@ -93,6 +99,16 @@
         <div id="mobileSelectModeGroup" class="mobile-select-mode-group hidden">
           <button id="mobileSelectOkBtn" title="Done selecting">OK</button>
           <button id="mobileSelectEditBtn" title="Actions for selected items" disabled>Edit</button>
+        </div>
+        <div id="moveHereGroup" class="move-here-group hidden">
+          <button id="moveHereBtn" title="Move here">
+            <span class="btn-label-desktop">Move here</span>
+            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path><line x1="12" y1="10" x2="12" y2="16"></line><polyline points="9 13 12 16 15 13"></polyline></svg>
+          </button>
+          <span id="moveHereStatus" class="move-here-status"></span>
+          <button id="moveCancelBtn" title="Cancel move">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+          </button>
         </div>
         <button id="newFolderBtn" title="New folder">
           <span class="btn-label-desktop">+ Folder</span>
@@ -416,6 +432,19 @@
     </div>
   </div>
 
+  <!-- Mobile rename/new-folder overlay: dims the screen and raises the item
+       being edited above the dim layer (see filemanagement.js), with a
+       temporary top bar (Cancel / action title / Confirm) replacing the
+       normal topbar for the duration of the edit. Desktop never shows this -
+       it edits inline with Enter/Escape/click-outside instead. -->
+  <div id="renameOverlay" class="rename-overlay hidden">
+    <div class="rename-overlay-bar">
+      <button id="renameOverlayCancelBtn" class="rename-overlay-btn">Cancel</button>
+      <span id="renameOverlayTitle" class="rename-overlay-title"></span>
+      <button id="renameOverlayConfirmBtn" class="rename-overlay-btn rename-overlay-confirm">Confirm</button>
+    </div>
+  </div>
+
   <!-- Login modal -->
   <div id="loginOverlay" class="modal-overlay hidden">
     <div class="modal login-modal">
@@ -509,21 +538,21 @@
       <div class="settings-row">
         <label for="seekBackInput">Rewind (s)</label>
         <div class="settings-field">
-          <input type="number" id="seekBackInput" min="1" max="300" step="1">
+          <input type="number" id="seekBackInput" min="0" max="60" step="1">
         </div>
       </div>
 
       <div class="settings-row">
         <label for="seekForwardInput">Fast-forward (s)</label>
         <div class="settings-field">
-          <input type="number" id="seekForwardInput" min="1" max="300" step="1">
+          <input type="number" id="seekForwardInput" min="0" max="60" step="1">
         </div>
       </div>
 
       <div class="settings-row">
         <label for="maxItemsLoadInput">Max items to load at once (0 = unlimited)</label>
         <div class="settings-field">
-          <input type="number" id="maxItemsLoadInput" min="0" step="1">
+          <input type="number" id="maxItemsLoadInput" min="0" max="100" step="1">
         </div>
       </div>
 

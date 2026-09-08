@@ -1155,10 +1155,10 @@ app.post('/api/lyrics/fetch', async (req, res) => {
       return !!(targetDuration && resultDuration && Math.abs(resultDuration - targetDuration) > 5);
     }
 
-    function scoreResult(result, targetTitle, targetDuration) {
-      // Higher is better. Weighted so a lower-priority factor (synced) can
-      // never outweigh a higher-priority one (title), matching the requested
-      // preference order: title match, then close duration, then synced.
+    function scoreResult(result, targetTitle, targetArtist, targetDuration) {
+      // Higher is better. Weighted so a lower-priority factor can never
+      // outweigh a higher-priority one, matching the requested preference
+      // order: title match, then artist match, then close duration.
       // Results more than 5s off in duration never reach this function at
       // all - see bestResult()/durationMismatch().
       let score = 0;
@@ -1168,32 +1168,35 @@ app.post('/api/lyrics/fetch', async (req, res) => {
         if (resultTitle === wantedTitle) score += 1000;
         else if (wantedTitle.includes(resultTitle) || resultTitle.includes(wantedTitle)) score += 500;
       }
+      const resultArtist = (result.artistName || '').trim().toLowerCase();
+      const wantedArtist = (targetArtist || '').trim().toLowerCase();
+      if (wantedArtist && resultArtist === wantedArtist) score += 500;
       if (targetDuration && result.duration) {
         const diff = Math.abs(result.duration - targetDuration);
         if (diff <= 1) score += 200;
         else if (diff <= 3) score += 100;
         else score += 40;
       }
-      if (result.syncedLyrics) score += 50;
       return score;
     }
 
-    function bestResult(results, targetTitle, targetDuration) {
+    function bestResult(results, targetTitle, targetArtist, targetDuration) {
       let usable = results.filter(r => r && (r.syncedLyrics || r.plainLyrics));
       usable = usable.filter(r => !durationMismatch(r.duration, targetDuration));
       if (!usable.length) return null;
-      usable.sort((a, b) => scoreResult(b, targetTitle, targetDuration) - scoreResult(a, targetTitle, targetDuration));
+      usable.sort((a, b) => scoreResult(b, targetTitle, targetArtist, targetDuration) - scoreResult(a, targetTitle, targetArtist, targetDuration));
       return usable[0];
     }
 
-    async function trySearch(track_name, targetDuration) {
+    async function trySearch(track_name, artist, targetDuration) {
       try {
         const params = new URLSearchParams({ track_name });
+        if (artist) params.set('artist_name', artist);
         const r = await fetch(`https://lrclib.net/api/search?${params}`, { headers });
         if (r.ok) {
           const results = await r.json();
           if (Array.isArray(results) && results.length) {
-            const data = bestResult(results, track_name, targetDuration);
+            const data = bestResult(results, track_name, artist, targetDuration);
             if (data) return data;
           }
         }
@@ -1205,19 +1208,41 @@ app.post('/api/lyrics/fetch', async (req, res) => {
 
     // Progressive fallback - real-world tags are often incomplete. Each step
     // only runs if the previous one found nothing. Requests are sequential
-    // (awaited one at a time), per LRCLIB's own API guidance.
+    // (awaited one at a time), per LRCLIB's own API guidance. /api/get is a
+    // signature lookup, so it always returns the same canonical record for
+    // a given track regardless of which fields are dropped - dropping
+    // fields only helps it match at all, it can't surface an alternate,
+    // synced release. So once a GET hits, the loop stops (no point re-
+    // querying for the same record) but keeps an unsynced hit as a
+    // fallback and still lets SEARCH run afterwards, since search can
+    // return a different, synced release of the same track.
     let data = null;
+    let matchedVia = null;
     if (title && artist_name) {
-      data = await tryGet(title, artist_name, album_name, duration);
-      if (!data && album_name) {
-        data = await tryGet(title, artist_name, null, duration);
+      const getRungs = [
+        ['get:track+artist+album+duration', album_name, duration],
+        ['get:track+artist+album', album_name, null],
+        ['get:track+artist+duration', null, duration],
+        ['get:track+artist', null, null]
+      ];
+      for (const [via, album, dur] of getRungs) {
+        if (via === 'get:track+artist+album' && !album_name) continue;
+        const result = await tryGet(title, artist_name, album, dur);
+        if (result) { data = result; matchedVia = via; break; }
       }
     }
-    if (!data && title) {
-      data = await trySearch(title, duration);
-    }
-    if (!data && !title) {
-      data = await trySearch(filenameStem, duration);
+    if (!data || !data.syncedLyrics) {
+      let searched = null;
+      let searchedVia = null;
+      if (title) {
+        searched = await trySearch(title, artist_name, duration);
+        searchedVia = 'search:track+artist';
+      }
+      if (!searched && !data) {
+        searched = await trySearch(filenameStem, null, duration);
+        searchedVia = 'search:filename';
+      }
+      if (searched && (!data || searched.syncedLyrics)) { data = searched; matchedVia = searchedVia; }
     }
 
     if (!data) {
@@ -1226,7 +1251,8 @@ app.post('/api/lyrics/fetch', async (req, res) => {
     res.json({
       found: true,
       lyrics: data.syncedLyrics || data.plainLyrics,
-      synced: !!data.syncedLyrics
+      synced: !!data.syncedLyrics,
+      matchedVia
     });
   } catch (err) {
     logIssue(`POST /api/lyrics/fetch failed: ${err.message}`);

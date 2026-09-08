@@ -242,8 +242,16 @@
   /* ----- Top bar ----- */
 
   .topbar { padding: 10px 12px; padding-top: calc(10px + var(--safe-top, 0px)); flex-wrap: wrap; gap: 8px; }
-  .path-breadcrumb { order: 3; width: 100%; flex-basis: 100%; }
-  .search-wrap { flex: 1; margin: 0; min-width: 0; }
+  .path-breadcrumb { order: 4; width: 100%; flex-basis: 100%; }
+  /* Desktop caps each crumb's width (see topbar.css) so a long name can't
+     grow the trail under the absolutely centered search bar - unneeded here
+     since .path-breadcrumb already scrolls horizontally on mobile instead. */
+  .crumb-label, .crumb-current { max-width: none; }
+  /* Desktop centers .search-wrap by taking it out of flex flow (position:
+     absolute + left/transform, see topbar.css) so appearing/disappearing
+     topbar buttons never shift it — undone here since mobile instead wants
+     it stretching to fill the wrapped row alongside the other flex items. */
+  .search-wrap { position: static; transform: none; flex: 1; margin: 0; min-width: 0; }
   /* Lens icon is positioned relative to search-input-wrap (input only),
      not search-wrap (which also contains the scope-toggle button) — using
      search-wrap as the anchor previously placed the icon underneath the
@@ -269,6 +277,89 @@
     align-items: center;
     justify-content: center;
   }
+  .move-here-group button { margin-left: 0; }
+  /* Move here / Cancel move get their own full-width row above the
+     breadcrumb (order 4): filemanagement.js's placeMoveHereGroup() moves
+     #moveHereGroup out of .topbar-actions and into #moveHereMobileSlot (a
+     direct child of .topbar, same as .path-breadcrumb) whenever the
+     viewport isn't hover-capable, so order:3 + width:100% here wraps the
+     slot onto its own line the same way order:4 does for the breadcrumb
+     below it. "Cancel move" pinned left, "Move here" pinned right -
+     row-reverse flips their visual order without touching the DOM order
+     (moveHereBtn then moveCancelBtn) the rest of the app/JS relies on. */
+  .move-here-mobile-slot:not(:empty) {
+    order: 3;
+    width: 100%;
+    flex-basis: 100%;
+  }
+  #moveHereGroup {
+    width: 100%;
+    margin-left: 0;
+    justify-content: space-between;
+    flex-direction: row-reverse;
+  }
+  /* #moveHereGroup's buttons are moved out of .topbar-actions on mobile
+     (see placeMoveHereGroup in filemanagement.js), so they no longer pick
+     up its base button look (background/border/color) - without this,
+     #moveCancelBtn (which has no styling of its own in topbar.css, relying
+     entirely on that inherited base) falls back to the browser's native
+     button chrome. Re-declared here instead, plus full line-width means
+     there's room to keep the text label instead of collapsing to just the
+     icon like the other squeezed topbar-actions buttons. */
+  #moveHereGroup button {
+    background: #2a2a2e;
+    border: none;
+    color: #e8e8ea;
+    font-size: 13px;
+    width: auto;
+    height: auto;
+    padding: 8px 12px;
+    /* .topbar-actions button's display:inline-flex no longer applies once
+       these buttons are moved out of .topbar-actions (see comment above) -
+       without it, #moveHereBtn's label span and icon lay out as ordinary
+       inline content and can wrap onto separate lines under a squeeze. */
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #moveHereGroup #moveHereBtn {
+    margin-left: 0;
+    /* #moveHereGroup button (above) sets a plain background for both
+       buttons - #moveHereBtn should instead keep its desktop accent fill
+       (topbar.css), which this re-asserts since #moveHereGroup button's
+       combined id+type selector otherwise outweighs plain #moveHereBtn. */
+    background: var(--accent-color);
+    color: #12121e;
+    /* Without these, "Move here"'s label and icon could each shrink/wrap
+       onto their own line under a long status text squeezing this button -
+       flex-shrink:0 keeps the button at its natural full width instead
+       (the status text is the one that's supposed to give way, via its own
+       min-width:0/ellipsis), and white-space:nowrap keeps the label text
+       itself from wrapping inside the button. */
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+  #moveHereGroup .btn-label-desktop { display: inline; }
+  #moveHereGroup .btn-icon-mobile { display: none; }
+  /* svg defaults to display:inline, which adds a small baseline descender
+     gap that reads as the icon sitting slightly off from "Move here"'s
+     text baseline next to it - block removes that gap. */
+  #moveHereBtn svg { display: block; flex-shrink: 0; }
+  /* "Moving N files" status text (see filemanagement.js's updateMoveHereBtn)
+     between the two buttons - mobile-only, since there's a full-width row
+     to put it on; desktop's pair stays exactly as it was. */
+  .move-here-status {
+    display: block;
+    flex: 1;
+    min-width: 0;
+    text-align: center;
+    font-size: 13px;
+    color: #a8a8ae;
+    padding: 0 10px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   /* Desktop shows a text/emoji label; mobile shows a proper line-icon
      instead so the row of buttons reads as an app toolbar, not squished
      desktop buttons. Swap which one is visible rather than reflowing text. */
@@ -287,6 +378,21 @@
      is repositioned below so it doesn't collide with the bottom nav. */
   .upload-panel { position: fixed; left: 8px; right: 8px; top: auto; bottom: calc(64px + var(--safe-bottom, 0px)); width: auto; max-height: 50vh; }
   .app.has-player .upload-panel { bottom: calc(var(--bottom-nav-h) + var(--player-collapsed-h, 58px) + var(--safe-bottom, 0px)); }
+  .upload-panel-header { flex-wrap: nowrap; overflow: visible; }
+  .upload-panel-header button {
+    flex: 0 0 auto;
+    width: auto !important;
+    height: auto !important;
+    margin-left: 0 !important;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 9px 10px !important;
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: visible;
+  }
+  #uploadExplorerBtn svg { display: none; }
 
   /* ----- File list -> app-style rows ----- */
 
@@ -736,6 +842,7 @@
     width: 100%;
     min-width: 0;
     overflow: hidden;
+    margin-top: 6px;
   }
   /* Same reasoning as .mini-player-subtitle in this file: each line is its
      own independent marquee entry (.pb-link-line in MARQUEE_TARGETS,
@@ -746,6 +853,7 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  .fp-subtitle .pb-link-line + .pb-link-line { margin-top: 4px; }
 
   .fp-row-seek { padding: 0 4px; margin-top: 14px; }
   #fpSeekBar {

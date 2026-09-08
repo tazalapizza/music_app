@@ -803,7 +803,7 @@ function showContextMenu(x, y, item) {
     options.push({ icon: EDIT_ICON_SVG, label: 'Edit metadata', action: () => openMetadataEditor([item]) });
   }
   options.push({ icon: RENAME_ICON_SVG, label: 'Rename', action: () => renameItem(item) });
-  options.push({ icon: FOLDER_ICON_SVG, label: 'Move to...', action: () => moveItem(item) });
+  options.push({ icon: FOLDER_ICON_SVG, label: 'Move', action: () => stageMove([item]) });
   options.push({ icon: TRASH_ICON_SVG, label: 'Delete', action: () => deleteItem(item) });
   renderMenuOptions(options);
   contextMenu.style.left = x + 'px';
@@ -825,19 +825,6 @@ document.addEventListener('click', (e) => {
 // ---- Multi-item context menu (2+ selected items) — no rename, acts on all of them ----
 async function addAllToQueue(items) {
   for (const item of items) await addToQueue(item);
-}
-async function moveItems(items) {
-  const destFolder = await showModal(`Move ${items.length} items to folder (relative path, blank = root)`);
-  if (destFolder === null) return;
-  for (const item of items) {
-    await api('/api/move', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: item.path, destFolder }),
-      retryOnAuth: false
-    });
-  }
-  clearSelection();
-  browse(currentPath, { keepSort: true });
 }
 async function deleteItems(items) {
   if (!confirmAction(`Delete ${items.length} items? This cannot be undone.`)) return;
@@ -887,7 +874,7 @@ function showMultiContextMenu(x, y, items) {
   if (audioItems.length) {
     options.push({ icon: EDIT_ICON_SVG, label: `Edit metadata (${audioItems.length})`, action: () => openMetadataEditor(audioItems) });
   }
-  options.push({ icon: FOLDER_ICON_SVG, label: 'Move to...', action: () => moveItems(items) });
+  options.push({ icon: FOLDER_ICON_SVG, label: 'Move', action: () => stageMove(items) });
   options.push({ icon: TRASH_ICON_SVG, label: `Delete ${items.length} items`, action: () => deleteItems(items) });
   renderMenuOptions(options);
   contextMenu.style.left = x + 'px';

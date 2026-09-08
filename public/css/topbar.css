@@ -14,12 +14,16 @@
 .topbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   padding: 12px 16px;
   padding-top: calc(12px + var(--safe-top, 0px));
   background: #1a1a1d;
   border-bottom: 1px solid #2a2a2e;
   flex-shrink: 0;
+  /* Anchors .search-wrap below, which is taken out of flex flow and
+     centered absolutely so its position stays fixed regardless of how
+     wide the breadcrumb or topbar-actions groups get (e.g. move-here /
+     rename ok-cancel buttons appearing and disappearing). */
+  position: relative;
 }
 .path-breadcrumb {
   font-size: 13px;
@@ -54,6 +58,17 @@
   padding: 4px 9px;
   border-radius: 6px;
   transition: background-color 0.12s ease, color 0.12s ease;
+  /* Caps each individual crumb's width so a single long folder name can't
+     push the whole trail (and, since it can now run behind the absolutely
+     centered search bar - see .search-wrap in topbar.css - the crumb
+     itself) underneath the search box. The full name is still available
+     via this element's title attribute. */
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+  vertical-align: bottom;
 }
 @media (hover: hover) {
   .crumb-label:hover { background: #232326; color: #e8e8ea; }
@@ -75,6 +90,12 @@
   color: color-mix(in srgb, var(--accent-color) 82%, white);
   font-weight: 600;
   padding: 4px 9px;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+  vertical-align: bottom;
 }
 .crumb-play-btn {
   background: none;
@@ -101,12 +122,17 @@
    with no preserveAspectRatio letterboxing on either axis. */
 .crumb-play-btn svg { width: 11.375px; height: 13px; }
 @media (hover: hover) { .crumb-play-btn:hover { opacity: 1; background: color-mix(in srgb, var(--accent-color) 22%, transparent); } }
+/* Desktop never places #moveHereGroup in here (see filemanagement.js's
+   placeMoveHereGroup) - collapsed to zero size so an empty slot can't
+   affect the topbar's layout. */
+.move-here-mobile-slot:empty { display: none; }
 .search-wrap {
-  position: relative;
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
   align-items: center;
   flex-shrink: 0;
-  margin: 0 16px;
 }
 .search-input {
   width: 220px;
@@ -148,6 +174,11 @@
 .topbar-actions {
   display: flex;
   align-items: center;
+  /* .search-wrap is absolutely positioned/centered (see its own rule) and
+     out of flex flow, so .topbar's remaining flow is just breadcrumb then
+     this group - margin-left: auto pins it to the right edge the way
+     justify-content: space-between used to. */
+  margin-left: auto;
 }
 .topbar-actions button {
   background: #2a2a2e;
@@ -174,6 +205,29 @@
 }
 .login-error.hidden { display: none; }
 .login-title { text-align: center; font-weight: 600; margin-bottom: 8px; }
+.move-here-group {
+  display: flex;
+  align-items: center;
+  margin-left: 8px;
+}
+.move-here-group.hidden { display: none; }
+.move-here-group button { margin-left: 0; }
+#moveHereBtn {
+  background: var(--accent-color);
+  color: #12121e;
+  font-weight: 700;
+  border-radius: 6px 0 0 6px;
+  gap: 6px;
+}
+@media (hover: hover) { #moveHereBtn:hover { background: color-mix(in srgb, var(--accent-color) 85%, white); } }
+#moveCancelBtn {
+  border-radius: 0 6px 6px 0;
+  padding: 6px 8px;
+}
+/* Desktop never shows moveHereStatus's text (see responsive.css, which is
+   the only place that populates its layout) - keep it out of flow here so
+   an empty span can't introduce any gap in the desktop button pair. */
+.move-here-status { display: none; }
 .upload-wrap { position: relative; display: inline-block; }
 #uploadBtn.uploading {
   background: var(--accent-color);

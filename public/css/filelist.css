@@ -178,6 +178,11 @@
   scrollbar-color: transparent transparent;
 }
 .file-list.scrollbar-active { scrollbar-color: #35353a transparent; }
+/* Mobile rename/new-folder overlay (see filemanagement.js): the list stays
+   put while the spotlighted row is being edited, so it doesn't scroll out
+   from under the fixed overlay bar. overflow-y alone doesn't stop an
+   in-progress touch-scroll gesture on iOS WebKit, hence touch-action too. */
+.file-list.rename-no-scroll { overflow-y: hidden; touch-action: none; }
 .file-list.scrollbar-active::-webkit-scrollbar-thumb { background: #35353a; }
 .file-list::-webkit-scrollbar { width: 6px; height: 6px; }
 .file-list::-webkit-scrollbar-track { background: transparent; }
@@ -290,6 +295,17 @@
 
 .file-name-wrap { overflow: hidden; min-width: 0; }
 .file-name { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.file-name-edit-input {
+  font: inherit;
+  font-size: 14px;
+  width: 100%;
+  background: #1a1a24;
+  color: inherit;
+  border: 1px solid var(--accent-color);
+  border-radius: 4px;
+  padding: 2px 6px;
+  outline: none;
+}
 .folder-counts { font-size: 11px; color: #77777d; margin-top: 2px; }
 .file-title, .file-artist, .file-album, .file-duration, .file-size {
   display: flex;

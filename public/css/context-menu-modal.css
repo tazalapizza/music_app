@@ -46,6 +46,64 @@
 }
 .modal-overlay.hidden { display: none; }
 #loginOverlay { z-index: 300; }
+
+/* ---------- Mobile rename/new-folder overlay ---------- */
+/* Dims the whole screen; the row being edited is raised above this layer
+   (via .rename-spotlight, applied to the row itself in filemanagement.js)
+   so it reads as spotlighted rather than dimmed like everything else. */
+.rename-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  z-index: 200;
+  touch-action: none;
+}
+.rename-overlay.hidden { display: none; }
+.rename-overlay-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  /* Above .rename-spotlight (201) - .rename-overlay-bar is a child of
+     .rename-overlay, whose own z-index:200 creates a stacking context that
+     would otherwise cap this element below the spotlighted row despite its
+     own position:fixed. */
+  z-index: 202;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 12px;
+  padding-top: calc(12px + var(--safe-top, 0px));
+  background: #1a1a1d;
+  border-bottom: 1px solid #2a2a2e;
+}
+.rename-overlay-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #e8e8ea;
+}
+.rename-overlay-btn {
+  background: none;
+  border: none;
+  color: #a8a8ae;
+  font-size: 14px;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+.rename-overlay-confirm {
+  color: var(--accent-color);
+  font-weight: 700;
+}
+/* Raises the row being renamed above .rename-overlay's dim layer so it
+   reads as spotlighted; the row keeps its normal position in the file
+   list, it's just visually lifted above the scrim covering everything
+   else. */
+.rename-spotlight {
+  position: relative;
+  z-index: 201;
+  background: #1a1a1d;
+  border-radius: 8px;
+}
 .modal {
   background: #26262a;
   padding: 20px;

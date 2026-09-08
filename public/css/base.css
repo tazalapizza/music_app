@@ -73,6 +73,18 @@ input, textarea, [contenteditable], [contenteditable="true"] {
   -webkit-user-select: text;
 }
 
+/* Desktop only: selected text (in the text-entry fields above - selection
+   is disabled everywhere else per the rule above) highlights in the app's
+   accent color instead of the browser's default blue, matching the rest of
+   the accent-driven UI. Not applied on mobile/touch, where text selection
+   uses the platform's own native handles/highlight instead. */
+@media (hover: hover) {
+  ::selection {
+    background: var(--accent-color);
+    color: #12121e;
+  }
+}
+
 
 /* ---------------------------------------------------------------------------
    Minimal text input / textarea style — shared, global base. Previously

@@ -78,16 +78,27 @@ function renderLibraryBreadcrumb(type, name) {
   breadcrumb.innerHTML = `
     <span class="crumb-item"><span class="crumb-label" data-path="">Home</span></span>
     ${sep}
-    <span class="crumb-item crumb-item-current"><span class="crumb-current">${type === 'artist' ? 'Artist' : 'Album'}: ${name}</span></span>
+    <span class="crumb-item crumb-item-current"><span class="crumb-current" title="${type === 'artist' ? 'Artist' : 'Album'}: ${name}">${type === 'artist' ? 'Artist' : 'Album'}: ${name}</span></span>
   `;
   breadcrumb.querySelector('.crumb-label').addEventListener('click', () => browse(''));
 }
 
 const PLAY_ICON_SVG = `<svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"></polygon></svg>`;
 
-function playAllSongs(songs) {
+function playAllSongs(songs, shuffle) {
   if (!songs || !songs.length) return;
-  resetQueue(songs.map(s => ({ path: s.path, name: s.name })));
+  let items = songs.map(s => ({ path: s.path, name: s.name }));
+  if (shuffle) {
+    for (let i = items.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [items[i], items[j]] = [items[j], items[i]];
+    }
+  }
+  resetQueue(items);
+  if (shuffle) {
+    shuffled = true;
+    updateShuffleBtnState();
+  }
   queueIndex = 0;
   playCurrent();
   renderQueue();
@@ -144,7 +155,7 @@ function renderLibraryBanner(type, data) {
       }, { passive: false });
     }
   }
-  libraryBanner.querySelector('.lib-play-all-btn').addEventListener('click', () => playAllSongs(data.songs));
+  libraryBanner.querySelector('.lib-play-all-btn').addEventListener('click', () => playAllSongs(data.songs, type === 'artist'));
   libraryBanner.classList.remove('hidden');
 }
 
@@ -160,7 +171,7 @@ function renderBreadcrumb(relPath) {
   breadcrumb.innerHTML = crumbs.map((c, i) => `
     ${i > 0 ? sep : ''}
     <span class="crumb-item${i === crumbs.length - 1 ? ' crumb-item-current' : ''}">
-      <span class="crumb-label" data-path="${c.path}">${c.label}</span>
+      <span class="crumb-label" data-path="${c.path}" title="${c.label}">${c.label}</span>
       ${i === crumbs.length - 1 ? `<button class="crumb-play-btn" data-path="${c.path}" title="Play this folder"><svg viewBox="6 4 14 16" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"></polygon></svg></button>` : ''}
     </span>
   `).join('');

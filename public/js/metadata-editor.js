@@ -499,7 +499,8 @@ metaLyricsLrclibBtn.addEventListener('click', () => {
   if (!metaEditState || metaEditState.group) return;
   const f = metaEditState.files[metaEditState.idx];
   const title = (f.vals.title || '').trim();
-  const query = title || f.name.replace(/\.[^./]+$/, '');
+  const artist = (f.vals.artist || '').trim();
+  const query = title && artist ? `${title} - ${artist}` : (title || f.name.replace(/\.[^./]+$/, ''));
   window.open(`https://lrclib.net/search/${encodeURIComponent(query)}`, '_blank', 'noopener');
 });
 
