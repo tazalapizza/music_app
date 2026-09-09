@@ -1,15 +1,148 @@
 // ---------------------------------------------------------------------------
-// offline-downloads.js — Lets a track (or a whole folder, recursively) be
-// downloaded (audio + embedded art) into IndexedDB so it keeps playing with
-// no network at all. Downloaded tracks are addressed by the same `path`
-// the rest of the app already uses (see playback.js's streamUrl) - nothing
-// about the queue/playlist data model changes; playCurrent() just prefers a
-// local blob URL over the network URL when one exists for that path.
+// offline-downloads.js — Two unrelated things sharing one "Download" menu
+// entry, split by isDesktopUI() (filemanagement.js) at the call site in
+// queue-playlists.js:
+//
+// - Mobile: downloadTrackForOffline/downloadFolderForOffline store a track
+//   (or a whole folder, recursively) - audio + embedded art - in IndexedDB
+//   so it keeps playing with no network at all. Downloaded tracks are
+//   addressed by the same `path` the rest of the app already uses (see
+//   playback.js's streamUrl) - nothing about the queue/playlist data model
+//   changes; playCurrent() just prefers a local blob URL over the network
+//   URL when one exists for that path.
+// - Desktop: downloadFileToComputer/downloadFolderToComputer just trigger a
+//   normal browser file save (no IndexedDB, no offline-in-app playback, no
+//   "remove" concept, no storage-used display in Settings) - desktop
+//   already has network access to this app's own server, so there's no
+//   real offline-playback need there; the ask on desktop is a real file.
+//
 // Depends on: state.js (DOWNLOAD_ICON_SVG/TRASH_ICON_SVG/CHECK_ICON_SVG),
 // settings-auth-toast-lyrics.js (showToast), selection.js (api), state.js
 // (fileNameOf) - all called lazily at click time so load order doesn't
 // matter.
 // ---------------------------------------------------------------------------
+
+// ---------- Desktop: plain file downloads (no IndexedDB, no offline wiring) ----------
+// progressPath, when given, drives that path's own row indicator (the same
+// ring/registry offline-downloads.js's mobile side uses - see
+// registerOfflineIndicator/updateOfflineIndicatorsFor above) instead of a
+// generic UI element, so a single file or folder download shows its
+// progress right on the row being downloaded, like mobile's does. isOffline
+// Downloaded()/isFolderFullyOffline() stay false for every path here since
+// desktop never writes to that store, so the indicator only ever shows the
+// transient ring, never the "stored" checkmark.
+async function downloadFileToComputer(item, progressPath) {
+  if (progressPath) { downloadProgress.set(progressPath, 0); updateOfflineIndicatorsFor(progressPath); }
+  try {
+    const res = await fetch(`${location.origin}/api/stream?path=${encodeURIComponent(item.path)}`);
+    if (!res.ok) throw new Error('Failed to fetch file');
+    const blob = progressPath
+      ? await readBlobWithProgress(res, (p) => {
+          downloadProgress.set(progressPath, p);
+          updateOfflineIndicatorsFor(progressPath);
+        })
+      : await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = item.name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (err) {
+    console.error('[download] failed:', item.path, err);
+    showToast('Download failed');
+  } finally {
+    if (progressPath) { downloadProgress.delete(progressPath); updateOfflineIndicatorsFor(progressPath); }
+  }
+}
+
+// Bundles several files into one .zip on the server (see the
+// /api/download-zip route in server.js) and triggers a single browser
+// download for it. Triggering one download per file in a loop instead used
+// to hit the browser's own "this site is downloading multiple files"
+// guard, which makes the user click through a confirmation for every file.
+// progressPath: see downloadFileToComputer's comment above. Falls back to a
+// generic ring on the settings button when there's no single row to anchor
+// to (a multi-file or multi-folder selection).
+async function downloadZipToComputer(paths, zipName, progressPath) {
+  const zipProgressRing = progressPath ? null : document.getElementById('zipProgressRing');
+  if (zipProgressRing) {
+    zipProgressRing.style.setProperty('--offline-progress', '0');
+    zipProgressRing.classList.add('active');
+  } else {
+    downloadProgress.set(progressPath, 0);
+    updateOfflineIndicatorsFor(progressPath);
+  }
+  try {
+    const res = await fetch(`${location.origin}/api/download-zip`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paths, zipName })
+    });
+    if (!res.ok) throw new Error('Failed to build zip');
+    // X-Total-Size (set by /api/download-zip) is a same-server estimate of
+    // the finished zip's size - the real response is chunked (archiver
+    // streams it as it's built) so it has no true Content-Length to read
+    // progress against otherwise.
+    const totalSize = Number(res.headers.get('X-Total-Size')) || 0;
+    const blob = await readBlobWithProgress(res, (p) => {
+      if (zipProgressRing) zipProgressRing.style.setProperty('--offline-progress', String(p));
+      else { downloadProgress.set(progressPath, p); updateOfflineIndicatorsFor(progressPath); }
+    }, totalSize);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = zipName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (err) {
+    console.error('[download] zip failed:', err);
+    showToast('Download failed');
+  } finally {
+    if (zipProgressRing) zipProgressRing.classList.remove('active');
+    else { downloadProgress.delete(progressPath); updateOfflineIndicatorsFor(progressPath); }
+  }
+}
+
+// A single file downloads directly; two or more are zipped into one
+// download so the browser only ever prompts/downloads once. No single row
+// to anchor progress to for this bulk case - falls back to the settings
+// button's ring (see downloadZipToComputer).
+async function downloadFilesToComputer(items) {
+  if (items.length === 1) { await downloadFileToComputer(items[0]); return; }
+  await downloadZipToComputer(items.map((i) => i.path), 'songs.zip');
+}
+
+async function downloadFolderToComputer(item) {
+  try {
+    const { files } = await api(`/api/expand?path=${encodeURIComponent(item.path)}`);
+    if (!files.length) { showToast('No audio files in this folder'); return; }
+    await downloadZipToComputer(files, `${item.name}.zip`, item.path);
+  } catch (err) {
+    console.error('[download] folder download failed:', item.path, err);
+    showToast('Download failed');
+  }
+}
+
+// Multi-select of several folders: expands all of them and bundles every
+// file into one zip, rather than one zip download per folder.
+async function downloadFoldersToComputer(items) {
+  try {
+    const expanded = await Promise.all(items.map((item) => api(`/api/expand?path=${encodeURIComponent(item.path)}`)));
+    const files = expanded.flatMap((r) => r.files);
+    if (!files.length) { showToast('No audio files in these folders'); return; }
+    await downloadZipToComputer(files, 'folders.zip');
+  } catch (err) {
+    console.error('[download] folders download failed:', err);
+    showToast('Download failed');
+  }
+}
+
+// ---------- Mobile: offline in-app playback (IndexedDB-backed) ----------
 
 const OFFLINE_DB_NAME = 'vibing-offline';
 const OFFLINE_DB_VERSION = 2;
@@ -135,8 +268,12 @@ function getOfflineDownloadsCount() {
 // Reads a fetch Response's body as a Blob while reporting progress against
 // its Content-Length (falls back to a single no-progress await when the
 // server didn't send a length or the browser can't stream the body).
-async function readBlobWithProgress(res, onProgress) {
-  const total = Number(res.headers.get('Content-Length')) || 0;
+// totalOverride covers responses that are streamed/chunked and so have no
+// real Content-Length (e.g. /api/download-zip, whose final size isn't known
+// until the zip is fully built) - the server sends its own best-effort
+// total in a custom header instead (see readBlobWithProgress's zip caller).
+async function readBlobWithProgress(res, onProgress, totalOverride) {
+  const total = totalOverride || Number(res.headers.get('Content-Length')) || 0;
   if (!res.body || !total) return res.blob();
   const reader = res.body.getReader();
   const chunks = [];

@@ -7,6 +7,7 @@ const { execFile } = require('child_process');
 const crypto = require('crypto');
 const NodeID3 = require('node-id3');
 const { LRUCache } = require('lru-cache');
+const archiver = require('archiver');
 
 const app = express();
 app.use(express.json({ limit: '25mb' }));
@@ -325,6 +326,67 @@ app.get('/api/expand', async (req, res) => {
     res.status(400).json({ error: err.message });
   }
 });
+
+// ---- Zip download: bundles a folder (recursively) or an explicit list of
+// files into a single .zip, so the desktop "Download" action (see
+// downloadFolderToComputer/downloadFilesToComputer in offline-downloads.js)
+// only ever triggers ONE browser download regardless of how many songs are
+// involved — triggering one download per file in a loop instead used to hit
+// the browser's own "this site is downloading multiple files" guard, which
+// requires the user to click through a confirmation for every single file. ----
+app.post('/api/download-zip', async (req, res) => {
+  try {
+    const paths = Array.isArray(req.body.paths) ? req.body.paths : [];
+    const files = paths.filter(isAudio);
+    if (files.length === 0) return res.status(400).json({ error: 'No audio files given' });
+    // Resolves (and, via safeResolve, sandbox-checks) every path up front -
+    // a bad path fails the whole request with a clear error instead of
+    // silently producing a zip missing one entry partway through streaming.
+    const resolved = files.map((f) => ({ rel: f, full: safeResolve(f) }));
+    const sizes = await Promise.all(resolved.map(({ full }) => fsp.stat(full).then((s) => s.size)));
+    const totalSize = sizes.reduce((sum, s) => sum + s, 0);
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${req.body.zipName || 'songs.zip'}"`);
+    // The real response is chunked (archiver streams the zip as it's built,
+    // so its final byte count isn't known up front) - this is only an
+    // estimate for the client's progress bar (store mode adds just a small
+    // fixed per-entry header/footer on top of each file's own size), not a
+    // real Content-Length.
+    res.setHeader('X-Total-Size', String(totalSize));
+    const archive = archiver('zip', { store: true }); // store (no compression) - audio is already compressed
+    archive.on('error', (err) => { logIssue(`POST /api/download-zip failed: ${err.message}`); res.destroy(); });
+    archive.pipe(res);
+    for (const { rel, full } of resolved) {
+      // Flattens each entry to its own filename inside the zip (not the
+      // full relative path) so files from different folders in a
+      // multi-select download don't nest into a deep, meaningless folder
+      // structure - duplicate filenames across folders are the one
+      // tradeoff, resolved by suffixing a counter.
+      const base = path.basename(rel);
+      archive.file(full, { name: uniqueZipEntryName(archive, base) });
+    }
+    await archive.finalize();
+  } catch (err) {
+    logIssue(`POST /api/download-zip failed: ${err.message}`);
+    if (!res.headersSent) res.status(400).json({ error: err.message });
+    else res.destroy();
+  }
+});
+// archiver has no built-in "avoid duplicate entry name" - tracked per
+// archive instance via a WeakMap so concurrent requests don't share state.
+const zipEntryNamesByArchive = new WeakMap();
+function uniqueZipEntryName(archive, name) {
+  let seen = zipEntryNamesByArchive.get(archive);
+  if (!seen) { seen = new Set(); zipEntryNamesByArchive.set(archive, seen); }
+  if (!seen.has(name)) { seen.add(name); return name; }
+  const ext = path.extname(name);
+  const stem = name.slice(0, name.length - ext.length);
+  let n = 2, candidate;
+  do { candidate = `${stem} (${n})${ext}`; n++; } while (seen.has(candidate));
+  seen.add(candidate);
+  return candidate;
+}
 
 // Finds a single audio file under a folder as fast as possible, for "play
 // folder" to start audible playback immediately instead of waiting on the

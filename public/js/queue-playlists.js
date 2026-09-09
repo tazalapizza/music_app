@@ -455,6 +455,7 @@ function renderPlaylists() {
       <button class="playlist-icon" title="Show tracks">${PLAYLIST_ICON_SVG}</button>
       <span class="playlist-name" title="Play playlist">${name}</span>
       <span class="playlist-count">${tracks.length}</span>
+      <button class="playlist-menu-btn" title="More options"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><circle cx="12" cy="5" r="1.8"></circle><circle cx="12" cy="12" r="1.8"></circle><circle cx="12" cy="19" r="1.8"></circle></svg></button>
     `;
     const tracksDiv = document.createElement('div');
     tracksDiv.className = 'playlist-tracks';
@@ -523,6 +524,34 @@ function renderPlaylists() {
       e.preventDefault();
       showPlaylistContextMenu(e.clientX, e.clientY, name, tracks);
     });
+
+    // Mobile-only 3-dot button (hidden on desktop, see responsive.css):
+    // opens the same context menu as desktop's right-click. Uses the same
+    // pointerup-based tap workaround as filelist.js's row-menu-btn, since a
+    // plain 'click' listener on a small nested button is unreliable under
+    // WKWebView's synthetic-click generation.
+    const menuBtn = header.querySelector('.playlist-menu-btn');
+    let menuBtnTracking = false, menuBtnStartX = 0, menuBtnStartY = 0;
+    menuBtn.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      menuBtnStartX = e.clientX;
+      menuBtnStartY = e.clientY;
+      menuBtnTracking = true;
+    });
+    menuBtn.addEventListener('pointermove', (e) => {
+      if (!menuBtnTracking) return;
+      if (Math.abs(e.clientX - menuBtnStartX) > FAST_TAP_MOVE_TOLERANCE || Math.abs(e.clientY - menuBtnStartY) > FAST_TAP_MOVE_TOLERANCE) {
+        menuBtnTracking = false;
+      }
+    });
+    menuBtn.addEventListener('pointerup', (e) => {
+      if (!menuBtnTracking) return;
+      menuBtnTracking = false;
+      e.stopPropagation();
+      const rect = menuBtn.getBoundingClientRect();
+      showPlaylistContextMenu(rect.right, rect.bottom, name, tracks);
+    });
+    menuBtn.addEventListener('click', (e) => e.stopPropagation());
 
     // Rows are only built when the playlist is actually expanded (and
     // paginated within that, for large playlists) - a collapsed playlist
@@ -817,14 +846,18 @@ function showContextMenu(x, y, item) {
   }
   if (item.isAudio) {
     options.push({ icon: EDIT_ICON_SVG, label: 'Edit metadata', action: () => openMetadataEditor([item]) });
-    if (isOfflineDownloaded(item.path)) {
+    if (isDesktopUI()) {
+      options.push({ icon: DOWNLOAD_ICON_SVG, label: 'Download', action: () => downloadFileToComputer(item, item.path) });
+    } else if (isOfflineDownloaded(item.path)) {
       options.push({ icon: TRASH_ICON_SVG, label: 'Remove offline download', action: () => removeOfflineDownload(item) });
     } else {
       options.push({ icon: DOWNLOAD_ICON_SVG, label: 'Download for offline', action: () => downloadTrackForOffline(item) });
     }
   }
   if (item.isDir) {
-    if (isFolderFullyOffline(item.path)) {
+    if (isDesktopUI()) {
+      options.push({ icon: DOWNLOAD_ICON_SVG, label: 'Download folder', action: () => downloadFolderToComputer(item) });
+    } else if (isFolderFullyOffline(item.path)) {
       options.push({ icon: TRASH_ICON_SVG, label: 'Remove offline download', action: () => removeFolderOfflineDownload(item) });
     } else {
       options.push({ icon: DOWNLOAD_ICON_SVG, label: 'Download folder for offline', action: () => downloadFolderForOffline(item) });
@@ -901,10 +934,18 @@ function showMultiContextMenu(x, y, items) {
   ];
   if (audioItems.length) {
     options.push({ icon: EDIT_ICON_SVG, label: `Edit metadata (${audioItems.length})`, action: () => openMetadataEditor(audioItems) });
-    options.push({ icon: DOWNLOAD_ICON_SVG, label: `Download ${audioItems.length} for offline`, action: () => audioItems.forEach(i => downloadTrackForOffline(i)) });
+    if (isDesktopUI()) {
+      options.push({ icon: DOWNLOAD_ICON_SVG, label: `Download ${audioItems.length}`, action: () => downloadFilesToComputer(audioItems) });
+    } else {
+      options.push({ icon: DOWNLOAD_ICON_SVG, label: `Download ${audioItems.length} for offline`, action: () => audioItems.forEach(i => downloadTrackForOffline(i)) });
+    }
   }
   if (dirItems.length) {
-    options.push({ icon: DOWNLOAD_ICON_SVG, label: `Download ${dirItems.length} folder${dirItems.length === 1 ? '' : 's'} for offline`, action: () => dirItems.forEach(i => downloadFolderForOffline(i)) });
+    if (isDesktopUI()) {
+      options.push({ icon: DOWNLOAD_ICON_SVG, label: `Download ${dirItems.length} folder${dirItems.length === 1 ? '' : 's'}`, action: () => downloadFoldersToComputer(dirItems) });
+    } else {
+      options.push({ icon: DOWNLOAD_ICON_SVG, label: `Download ${dirItems.length} folder${dirItems.length === 1 ? '' : 's'} for offline`, action: () => dirItems.forEach(i => downloadFolderForOffline(i)) });
+    }
   }
   options.push({ icon: FOLDER_ICON_SVG, label: 'Move', action: () => stageMove(items) });
   options.push({ icon: TRASH_ICON_SVG, label: `Delete ${items.length} items`, action: () => deleteItems(items) });

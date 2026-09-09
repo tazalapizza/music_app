@@ -130,7 +130,7 @@
             </div>
           </div>
         </div>
-        <button id="settingsBtn" title="Settings"><svg id="settingsCogIcon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-settings"></use></svg></button>
+        <button id="settingsBtn" title="Settings"><svg id="settingsCogIcon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-settings"></use></svg><span id="zipProgressRing" class="zip-progress-ring" title="Zipping..."></span></button>
         <button id="authBtn" class="desktop-only-topbar-btn" title="Log in to make changes"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>Log in</button>
       </div>
     </header>
@@ -657,11 +657,11 @@
         <button id="rebuildLibraryBtn">Update library metadata</button>
       </div>
 
-      <div class="settings-row">
+      <div class="settings-row offline-downloads-mobile-only">
         <label>Offline downloads</label>
         <div class="settings-field" id="offlineDownloadsSize">0 songs, 0 B</div>
       </div>
-      <div class="settings-row settings-row-buttons">
+      <div class="settings-row settings-row-buttons offline-downloads-mobile-only">
         <button id="deleteAllDownloadsBtn">Delete all downloads</button>
       </div>
 

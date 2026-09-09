@@ -15,15 +15,16 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@capacitor/android": "^8.0.0",
+    "@capacitor/core": "^8.0.0",
+    "@capacitor/ios": "^8.0.0",
+    "@mediagrid/capacitor-native-audio": "github:tazalapizza/capacitor-native-audio",
+    "archiver": "^7.0.1",
     "express": "^5.2.1",
     "lru-cache": "^11.0.2",
     "multer": "^2.2.0",
     "music-metadata": "^7.14.0",
-    "node-id3": "^0.2.9",
-    "@capacitor/core": "^8.0.0",
-    "@capacitor/android": "^8.0.0",
-    "@capacitor/ios": "^8.0.0",
-    "@mediagrid/capacitor-native-audio": "github:tazalapizza/capacitor-native-audio"
+    "node-id3": "^0.2.9"
   },
   "devDependencies": {
     "@capacitor/cli": "^8.0.0"

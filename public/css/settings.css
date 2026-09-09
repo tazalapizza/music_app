@@ -10,6 +10,27 @@
   to { transform: rotate(360deg); }
 }
 
+/* Zip-download progress ring: same filling-ring look as mobile's per-row
+   offline-download indicator (see .offline-indicator in responsive.css),
+   just anchored to the settings button instead of a file row, since
+   desktop's zip downloads (see downloadZipToComputer in
+   offline-downloads.js) aren't tied to any one still-open menu/row by the
+   time the zip is actually streaming. */
+#settingsBtn { position: relative; }
+.zip-progress-ring {
+  display: none;
+  position: absolute;
+  bottom: 3px;
+  right: 3px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: conic-gradient(var(--accent-color) calc(var(--offline-progress, 0) * 360deg), color-mix(in srgb, var(--accent-color) 20%, transparent) 0);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 1.5px), #000 calc(100% - 1.5px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 1.5px), #000 calc(100% - 1.5px));
+}
+.zip-progress-ring.active { display: block; }
+
 .settings-modal { width: 340px; }
 .settings-title { font-size: 15px; font-weight: 700; margin-bottom: 14px; }
 .settings-row {

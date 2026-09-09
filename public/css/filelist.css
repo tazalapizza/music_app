@@ -295,6 +295,52 @@
 
 .file-name-wrap { overflow: hidden; min-width: 0; }
 .file-name { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+
+/* Offline-download indicator: a filling circle (conic-gradient progress
+   ring, driven by --offline-progress) while a download is in flight, then
+   a checkmark once it's stored - both in the accent color. Invisible (and
+   takes no layout space) for rows with no download in progress or stored.
+   Unconditional (not mobile-gated) since desktop rows show one too - see
+   offline-downloads.js's registerOfflineIndicator calls in filelist.js and
+   .offline-indicator-desktop below. Mobile's own instance lives inside
+   .row-actions-cell (see responsive.css) and reuses this same look. */
+.offline-indicator {
+  display: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.offline-indicator.downloading,
+.offline-indicator.downloaded {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.offline-indicator.downloading {
+  background: conic-gradient(var(--accent-color) calc(var(--offline-progress, 0) * 360deg), color-mix(in srgb, var(--accent-color) 20%, transparent) 0);
+  /* Ring instead of a solid disc: mask out everything but a thin band at
+     the edge, so the conic-gradient progress only reads as a filling
+     border regardless of whatever the row's own background is. */
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
+}
+.offline-indicator.downloaded { color: var(--accent-color); }
+.offline-indicator.downloaded svg { width: 100%; height: 100%; display: block; }
+
+/* Desktop's copy sits just to the right of the name text. It lives inside
+   .file-name-wrap (an existing grid cell, rather than a new one - a new
+   direct child of .file-row would shift every column after it, since
+   .file-row's grid-template-columns is a fixed list matching the row's
+   exact child count) via an inner .file-name-row flex wrapper, so the name
+   itself can still shrink/ellipsis while the indicator stays fixed-size
+   next to it; .folder-counts (folders only) stays a separate line below,
+   outside this wrapper. */
+.file-name-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+/* No flex-grow: the name sizes to its own text (shrinking to ellipsis only
+   once the row itself runs out of room), so the indicator sits right after
+   the text rather than pinned to the far end of the row. */
+.file-name-row .file-name { flex: 0 1 auto; min-width: 0; }
 .file-name-edit-input {
   font: inherit;
   font-size: 14px;

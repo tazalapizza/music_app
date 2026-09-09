@@ -191,7 +191,10 @@ function buildFileRow(item, opts = {}) {
         <button class="folder-icon-play-btn" title="Play folder">▶</button>
       </span>
       <div class="file-name-wrap">
-        <div class="file-name">${displayName}</div>
+        <div class="file-name-row">
+          <div class="file-name">${displayName}</div>
+          <span class="offline-indicator offline-indicator-desktop" title="Download status"></span>
+        </div>
         <div class="folder-counts">${[
           counts.songs ? `${counts.songs} song${counts.songs === 1 ? '' : 's'}` : '',
           counts.folders ? `${counts.folders} folder${counts.folders === 1 ? '' : 's'}` : ''
@@ -209,8 +212,12 @@ function buildFileRow(item, opts = {}) {
       e.stopPropagation();
       playFolder(item);
     });
-    const offlineIndicatorEl = row.querySelector('.offline-indicator');
-    if (offlineIndicatorEl) registerOfflineIndicator(item.path, offlineIndicatorEl);
+    // Two .offline-indicator elements exist per row (see
+    // .offline-indicator-desktop above and the one inside
+    // mobileRowControlsHtml) - CSS shows only whichever one matches the
+    // current viewport, but both need registering so the visible one
+    // actually updates.
+    row.querySelectorAll('.offline-indicator').forEach((el) => registerOfflineIndicator(item.path, el));
     row.addEventListener('click', (e) => handleRowClickMobileAware(e, item, () => browse(item.path)));
   } else {
     // Mobile-only alternate row content (see .mobile-row-view-meta in
@@ -229,7 +236,12 @@ function buildFileRow(item, opts = {}) {
       <span class="file-track">${item.track || ''}</span>
       <span class="file-icon">${item.isAudio ? '🎵' : '📄'}</span>
       <div class="file-name-wrap">
-        <div class="file-name">${item.name}</div>
+        ${item.isAudio ? `
+          <div class="file-name-row">
+            <div class="file-name">${item.name}</div>
+            <span class="offline-indicator offline-indicator-desktop" title="Download status"></span>
+          </div>
+        ` : `<div class="file-name">${item.name}</div>`}
       </div>
       ${mobileMetaRowHtml}
       <span class="file-title"><span class="cell-text"></span></span>
@@ -242,8 +254,10 @@ function buildFileRow(item, opts = {}) {
     `;
     if (item.isAudio) {
       const iconSpan = row.querySelector('.file-icon');
-      const offlineIndicatorEl = row.querySelector('.offline-indicator');
-      if (offlineIndicatorEl) registerOfflineIndicator(item.path, offlineIndicatorEl);
+      // Two .offline-indicator elements exist per row (desktop's and
+      // mobile's, see the folder branch above for why) - CSS shows only
+      // whichever matches the current viewport, but both need registering.
+      row.querySelectorAll('.offline-indicator').forEach((el) => registerOfflineIndicator(item.path, el));
       const titleSpan = row.querySelector('.file-title .cell-text');
       const artistSpan = row.querySelector('.file-artist .cell-text');
       const albumSpan = row.querySelector('.file-album .cell-text');
