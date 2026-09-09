@@ -15,7 +15,8 @@ async function browse(relPath, opts = {}) {
   searchClearBtn.classList.add('hidden');
   if (!opts.keepSort) { sortColumn = null; sortDir = 'asc'; }
   if (!opts.skipHistory && relPath !== (history.state && history.state.path)) {
-    history.pushState({ path: relPath }, '', '#' + encodeURIComponent(relPath));
+    const url = relPath ? '#' + encodeURIComponent(relPath) : location.pathname + location.search;
+    history.pushState({ path: relPath }, '', url);
   }
   const data = await api(`/api/browse?path=${encodeURIComponent(relPath)}`);
   renderBreadcrumb(relPath);
@@ -25,7 +26,7 @@ async function browse(relPath, opts = {}) {
 window.addEventListener('popstate', (e) => {
   const s = e.state || {};
   if (s.view === 'artist' || s.view === 'album') {
-    openLibrary(s.view, s.name, { skipHistory: true });
+    openLibrary(s.view, s.name, { skipHistory: true, preferExt: s.preferExt });
   } else {
     browse(typeof s.path === 'string' ? s.path : '', { skipHistory: true });
   }
@@ -52,20 +53,22 @@ const MUSIC_NOTE_PLACEHOLDER = '<div class="lib-art-placeholder">🎵</div>';
 async function openLibrary(type, name, opts = {}) {
   const settingsCogIcon = document.getElementById('settingsCogIcon');
   settingsCogIcon.classList.add('spinning');
+  const preferExt = opts.preferExt || null;
+  const prefQuery = preferExt ? `&pref=${encodeURIComponent(preferExt)}` : '';
   let data;
   try {
-    data = await api(`/api/library/${type}?name=${encodeURIComponent(name)}`);
+    data = await api(`/api/library/${type}?name=${encodeURIComponent(name)}${prefQuery}`);
   } finally {
     settingsCogIcon.classList.remove('spinning');
   }
-  libraryView = { type, name: data.name || name };
+  libraryView = { type, name: data.name || name, preferExt };
   isSearching = false;
   searchInput.value = '';
   searchClearBtn.classList.add('hidden');
   fileListWrap.classList.add('search-mode'); // rows get the open-containing-folder button
   if (!opts.keepSort) { sortColumn = null; sortDir = 'asc'; }
   if (!opts.skipHistory) {
-    history.pushState({ view: type, name: libraryView.name }, '', `#${type}=${encodeURIComponent(libraryView.name)}`);
+    history.pushState({ view: type, name: libraryView.name, preferExt }, '', `#${type}=${encodeURIComponent(libraryView.name)}`);
   }
   renderLibraryBreadcrumb(type, libraryView.name);
   renderLibraryBanner(type, data);

@@ -842,6 +842,33 @@ function libSongItem(rel, e) {
   return { path: rel, name: path.basename(rel), isDir: false, isAudio: true, size: e.size, track: e.track, disc: e.disc, album: e.album };
 }
 
+// Some albums have both a .flac copy (usually in a separate folder) and an
+// .mp3/.m4a copy of the same song, which would otherwise show up as two rows
+// in artist/album views. The flac copy's path doesn't match the lossy copy's
+// path, so group by album+title (tag data) instead, and keep one copy per
+// group: the requested `preferExt` when that copy exists in the group, else
+// mp3, else m4a, else whatever's there.
+function dedupeSongsByExt(matches, preferExt) {
+  const groups = new Map();
+  for (const m of matches) {
+    const ext = path.extname(m.rel).slice(1).toLowerCase();
+    const e = m.e;
+    const key = [
+      (e.album || '').toLowerCase(),
+      (e.title || path.basename(m.rel, path.extname(m.rel))).toLowerCase()
+    ].join('\x01');
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({ ...m, ext });
+  }
+  const result = [];
+  for (const group of groups.values()) {
+    if (group.length === 1) { result.push(group[0]); continue; }
+    const preferred = group.find(g => g.ext === preferExt) || group.find(g => g.ext === 'mp3') || group.find(g => g.ext === 'm4a') || group[0];
+    result.push(preferred);
+  }
+  return result;
+}
+
 app.post('/api/library/rebuild', requireAuth, async (req, res) => {
   try {
     markLibraryDirty();
@@ -866,9 +893,10 @@ app.get('/api/library/artist', async (req, res) => {
       }
     }
     matches.sort((a, b) => a.rel.localeCompare(b.rel, undefined, { numeric: true }));
+    const deduped = dedupeSongsByExt(matches, (req.query.pref || '').toLowerCase());
     const albumsMap = new Map();
     let totalDuration = 0, totalSize = 0;
-    for (const { rel, e } of matches) {
+    for (const { rel, e } of deduped) {
       totalDuration += e.duration || 0;
       totalSize += e.size || 0;
       if (e.album) {
@@ -884,8 +912,8 @@ app.get('/api/library/artist', async (req, res) => {
     }
     res.json({
       name: rawName,
-      songs: matches.map(({ rel, e }) => libSongItem(rel, e)),
-      totalSongs: matches.length,
+      songs: deduped.map(({ rel, e }) => libSongItem(rel, e)),
+      totalSongs: deduped.length,
       totalDuration,
       totalSize,
       albums: [...albumsMap.values()].sort((a, b) => (a.year || 0) - (b.year || 0) || a.name.localeCompare(b.name))
@@ -938,19 +966,20 @@ app.get('/api/library/album', async (req, res) => {
       if ((e.album || '').toLowerCase() === name) matches.push({ rel, e });
     }
     matches.sort((a, b) => a.rel.localeCompare(b.rel, undefined, { numeric: true }));
+    const deduped = dedupeSongsByExt(matches, (req.query.pref || '').toLowerCase());
     const artists = new Set();
     let totalDuration = 0, totalSize = 0, year = null, artPath = null;
-    for (const { rel, e } of matches) {
+    for (const { rel, e } of deduped) {
       totalDuration += e.duration || 0;
       totalSize += e.size || 0;
-      if (e.artist) artists.add(e.artist);
+      if (e.albumartist || e.artist) artists.add(e.albumartist || e.artist);
       if (!year && e.year) year = e.year;
       if (!artPath && e.hasArt) artPath = rel;
     }
     res.json({
       name: rawName,
-      songs: matches.map(({ rel, e }) => libSongItem(rel, e)),
-      totalSongs: matches.length,
+      songs: deduped.map(({ rel, e }) => libSongItem(rel, e)),
+      totalSongs: deduped.length,
       totalDuration,
       totalSize,
       artists: [...artists].sort((a, b) => a.localeCompare(b)),
@@ -1386,6 +1415,7 @@ app.post('/api/edit-meta/get', async (req, res) => {
           title: parsed.common.title || '',
           artist: parsed.common.artist || '',
           album: parsed.common.album || '',
+          albumartist: parsed.common.albumartist || '',
           year: parsed.common.year || '',
           track: parseTrackOrDiscNumber(parsed.common.track && parsed.common.track.no) ?? '',
           disc: parseTrackOrDiscNumber(parsed.common.disk && parsed.common.disk.no) ?? '',
@@ -1393,7 +1423,7 @@ app.post('/api/edit-meta/get', async (req, res) => {
           hasArt: !!(parsed.common.picture && parsed.common.picture.length)
         };
       } catch {
-        return { path: rel, name: path.basename(rel), title: '', artist: '', album: '', year: '', track: '', disc: '', lyrics: '', hasArt: false };
+        return { path: rel, name: path.basename(rel), title: '', artist: '', album: '', albumartist: '', year: '', track: '', disc: '', lyrics: '', hasArt: false };
       }
     }));
     res.json({ files });
@@ -1423,7 +1453,7 @@ function buildFlacPictureBlock(image, mime) {
   return buf;
 }
 
-const EDIT_TAG_KEYS = { title: 'title', artist: 'artist', album: 'album', year: 'date', track: 'track', disc: 'disc' };
+const EDIT_TAG_KEYS = { title: 'title', artist: 'artist', albumartist: 'album_artist', album: 'album', year: 'date', track: 'track', disc: 'disc' };
 
 async function writeMetadataEdits(full, tags, art) {
   const ext = path.extname(full).toLowerCase();
@@ -1508,6 +1538,7 @@ async function writeMetadataEdits(full, tags, art) {
         };
         setIfPresent('title', 'title');
         setIfPresent('artist', 'artist');
+        setIfPresent('performerInfo', 'albumartist');
         setIfPresent('album', 'album');
         setIfPresent('year', 'year');
         setIfPresent('trackNumber', 'track', String);

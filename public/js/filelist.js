@@ -250,18 +250,19 @@ function buildFileRow(item, opts = {}) {
         durationSpan.textContent = formatDuration(meta.duration);
         if (mobileTitleSpan) mobileTitleSpan.textContent = meta.title || item.name;
         if (mobileSubtitleSpan) mobileSubtitleSpan.textContent = [meta.artist, meta.album].filter(Boolean).join(' • ');
+        const sourceExt = item.path.split('.').pop().toLowerCase();
         if (meta.artist) {
           artistSpan.classList.add('link-cell');
           artistSpan.addEventListener('click', (e) => {
             e.stopPropagation();
-            openLibrary('artist', meta.artist);
+            openLibrary('artist', meta.artist, { preferExt: sourceExt });
           });
         }
         if (meta.album) {
           albumSpan.classList.add('link-cell');
           albumSpan.addEventListener('click', (e) => {
             e.stopPropagation();
-            openLibrary('album', meta.album);
+            openLibrary('album', meta.album, { preferExt: sourceExt });
           });
         }
         if (meta.hasArt) {

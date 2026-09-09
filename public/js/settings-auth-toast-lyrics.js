@@ -49,7 +49,7 @@ function closeSettings() {
     // unlimited, for 0) takes effect immediately rather than only on the
     // next navigation.
     if (isSearching) performSearch(searchInput.value.trim());
-    else if (libraryView) openLibrary(libraryView.type, libraryView.name, { skipHistory: true, keepSort: true });
+    else if (libraryView) openLibrary(libraryView.type, libraryView.name, { skipHistory: true, keepSort: true, preferExt: libraryView.preferExt });
     else renderFileList(lastFetchedItems);
     renderQueue();
     renderPlaylists();

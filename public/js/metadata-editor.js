@@ -7,7 +7,7 @@
 // ---------------------------------------------------------------------------
 
 // ---------- Metadata editor ----------
-const META_FIELDS = ['title', 'artist', 'album', 'year', 'track', 'disc'];
+const META_FIELDS = ['title', 'artist', 'albumartist', 'album', 'year', 'track', 'disc'];
 const KEEP_MULTI = '--- keep multiple values ---';
 
 let metaEditState = null;
@@ -91,6 +91,7 @@ async function openMetadataEditor(items) {
         title: f.title || '',
         artist: f.artist || '',
         album: f.album || '',
+        albumartist: f.albumartist || '',
         year: f.year ? String(f.year) : '',
         track: f.track ? String(f.track) : '',
         disc: f.disc ? String(f.disc) : ''
@@ -707,7 +708,7 @@ async function applyMetaEdits() {
     if (playingTrack && edits.some(e => e.path === playingTrack.path || renameMap[e.path] === playingTrack.path)) {
       loadLyricsForTrack(playingTrack.path);
     }
-    if (libraryView) openLibrary(libraryView.type, libraryView.name, { skipHistory: true, keepSort: true });
+    if (libraryView) openLibrary(libraryView.type, libraryView.name, { skipHistory: true, keepSort: true, preferExt: libraryView.preferExt });
     else if (isSearching) performSearch(searchInput.value.trim());
     else browse(currentPath, { skipHistory: true, keepSort: true });
 

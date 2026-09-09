@@ -554,7 +554,7 @@ function playCurrent() {
         const a = document.createElement('span');
         a.className = 'pb-link';
         a.textContent = meta.artist;
-        a.addEventListener('click', () => openLibrary('artist', meta.artist));
+        a.addEventListener('click', () => openLibrary('artist', meta.artist, { preferExt: track.path.split('.').pop().toLowerCase() }));
         line.appendChild(a);
         pathSpan.appendChild(line);
       }
@@ -564,7 +564,7 @@ function playCurrent() {
         const al = document.createElement('span');
         al.className = 'pb-link';
         al.textContent = meta.album;
-        al.addEventListener('click', () => openLibrary('album', meta.album));
+        al.addEventListener('click', () => openLibrary('album', meta.album, { preferExt: track.path.split('.').pop().toLowerCase() }));
         line.appendChild(al);
         pathSpan.appendChild(line);
       }

@@ -448,7 +448,7 @@ if (initialHash.startsWith('artist=')) {
   history.replaceState({ view: 'album', name: n }, '', location.hash);
   openLibrary('album', n, { skipHistory: true });
 } else {
-  history.replaceState({ path: initialHash }, '', location.hash || '#');
+  history.replaceState({ path: initialHash }, '', location.hash || location.pathname + location.search);
   browse(initialHash, { skipHistory: true });
 }
 loadPlaylists();
