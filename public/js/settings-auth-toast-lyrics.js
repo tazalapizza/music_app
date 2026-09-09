@@ -23,7 +23,14 @@ function openSettings() {
   hideNonMusicInput.checked = settings.hideNonMusic;
   replayGainInput.checked = settings.replayGainEnabled;
   maxItemsLoadInput.value = settings.maxItemsLoad;
+  updateOfflineDownloadsSizeDisplay();
   settingsOverlay.classList.remove('hidden');
+}
+
+function updateOfflineDownloadsSizeDisplay() {
+  const count = getOfflineDownloadsCount();
+  const label = `${count} song${count === 1 ? '' : 's'}, ${formatSize(getOfflineDownloadsTotalSize())}`;
+  document.getElementById('offlineDownloadsSize').textContent = label;
 }
 function closeSettings() {
   const back = parseInt(seekBackInput.value, 10);
@@ -85,6 +92,14 @@ document.getElementById('resetLayoutBtn').addEventListener('click', () => {
     fileListWrap.style.removeProperty(`--col-${col}-w`);
   });
   showToast('Layout reset to default');
+});
+
+document.getElementById('deleteAllDownloadsBtn').addEventListener('click', async () => {
+  if (getOfflineDownloadsCount() === 0) { showToast('No offline downloads to delete'); return; }
+  if (!confirmAction('Delete all offline downloads? This cannot be undone.')) return;
+  await deleteAllOfflineDownloads();
+  updateOfflineDownloadsSizeDisplay();
+  showToast('Offline downloads deleted');
 });
 
 document.getElementById('rebuildLibraryBtn').addEventListener('click', async (e) => {

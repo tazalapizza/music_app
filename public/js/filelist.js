@@ -175,7 +175,10 @@ function buildFileRow(item, opts = {}) {
   // is the only selection indicator. See responsive.css for the show/hide
   // rules and layout-init.js for the select-mode wiring.
   const mobileRowControlsHtml = `
-    <button class="row-menu-btn" title="More options"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><circle cx="12" cy="5" r="1.8"></circle><circle cx="12" cy="12" r="1.8"></circle><circle cx="12" cy="19" r="1.8"></circle></svg></button>
+    <div class="row-actions-cell">
+      ${(item.isAudio || item.isDir) ? '<span class="offline-indicator" title="Offline download status"></span>' : ''}
+      <button class="row-menu-btn" title="More options"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><circle cx="12" cy="5" r="1.8"></circle><circle cx="12" cy="12" r="1.8"></circle><circle cx="12" cy="19" r="1.8"></circle></svg></button>
+    </div>
   `;
 
   if (item.isDir) {
@@ -206,6 +209,8 @@ function buildFileRow(item, opts = {}) {
       e.stopPropagation();
       playFolder(item);
     });
+    const offlineIndicatorEl = row.querySelector('.offline-indicator');
+    if (offlineIndicatorEl) registerOfflineIndicator(item.path, offlineIndicatorEl);
     row.addEventListener('click', (e) => handleRowClickMobileAware(e, item, () => browse(item.path)));
   } else {
     // Mobile-only alternate row content (see .mobile-row-view-meta in
@@ -237,6 +242,8 @@ function buildFileRow(item, opts = {}) {
     `;
     if (item.isAudio) {
       const iconSpan = row.querySelector('.file-icon');
+      const offlineIndicatorEl = row.querySelector('.offline-indicator');
+      if (offlineIndicatorEl) registerOfflineIndicator(item.path, offlineIndicatorEl);
       const titleSpan = row.querySelector('.file-title .cell-text');
       const artistSpan = row.querySelector('.file-artist .cell-text');
       const albumSpan = row.querySelector('.file-album .cell-text');

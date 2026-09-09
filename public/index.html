@@ -657,6 +657,14 @@
         <button id="rebuildLibraryBtn">Update library metadata</button>
       </div>
 
+      <div class="settings-row">
+        <label>Offline downloads</label>
+        <div class="settings-field" id="offlineDownloadsSize">0 songs, 0 B</div>
+      </div>
+      <div class="settings-row settings-row-buttons">
+        <button id="deleteAllDownloadsBtn">Delete all downloads</button>
+      </div>
+
       <div class="settings-row settings-row-auth-mobile">
         <button id="settingsAuthBtn"></button>
       </div>
@@ -671,6 +679,7 @@
 
 <script src="js/vendor-signalsmith-stretch.js"></script>
 <script src="js/state.js"></script>
+    <script src="js/offline-downloads.js"></script>
     <script src="js/native-audio-adapter.js"></script>
     <script src="js/system-volume-adapter.js"></script>
     <script src="js/selection.js"></script>
@@ -686,5 +695,21 @@
     <script src="js/metadata-editor.js"></script>
     <script src="js/layout-init.js"></script>
     <script src="js/albums-carousel.js"></script>
+<script>
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js');
+    // sw.js's skipWaiting() lets a new worker activate immediately instead
+    // of waiting for every tab to close - reloading here once it takes
+    // over is what actually gets the new shell into this open tab, rather
+    // than leaving it running the old cached scripts until the next manual
+    // reload happens to land after activation.
+    let reloadedForNewWorker = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (reloadedForNewWorker) return;
+      reloadedForNewWorker = true;
+      location.reload();
+    });
+  }
+</script>
 </body>
 </html>

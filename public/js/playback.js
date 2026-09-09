@@ -421,7 +421,7 @@ function playCurrent() {
     title: cachedMetaForLoad.title || track.name,
     artist: cachedMetaForLoad.artist || undefined,
     album: cachedMetaForLoad.album || undefined,
-    artworkUrl: cachedMetaForLoad.hasArt ? `${location.origin}/api/art?path=${encodeURIComponent(track.path)}` : undefined
+    artworkUrl: cachedMetaForLoad.hasArt ? (getOfflineArtUrl(track.path) || `${location.origin}/api/art?path=${encodeURIComponent(track.path)}`) : undefined
   } : { title: track.name };
   // STEP 2 FIX: on native, play() must not fire until preload() has actually
   // resolved (NativeAudio has no internal queueing of "play as soon as
@@ -444,7 +444,7 @@ function playCurrent() {
   // wasn't caught until testing on native specifically. Using
   // location.origin here matches what the artworkUrl above already did
   // correctly.
-  const streamUrl = `${location.origin}/api/stream?path=${encodeURIComponent(track.path)}`;
+  const streamUrl = getOfflineStreamUrl(track.path) || `${location.origin}/api/stream?path=${encodeURIComponent(track.path)}`;
   NativeAudioAdapter.load(streamUrl, loadMeta)
     .then(() => {
       // Stale-response guard: if the user clicked another track while this

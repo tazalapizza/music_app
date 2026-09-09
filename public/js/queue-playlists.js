@@ -696,9 +696,8 @@ function showPlaylistContextMenu(x, y, name, tracks) {
     { icon: TRASH_ICON_SVG, label: 'Delete', action: () => deletePlaylist(name) }
   ];
   renderMenuOptions(options);
-  contextMenu.style.left = x + 'px';
-  contextMenu.style.top = y + 'px';
   contextMenu.classList.remove('hidden');
+  positionContextMenu(x, y);
 }
 
 fileList.addEventListener('click', (e) => {
@@ -780,6 +779,23 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 });
 
 // ---------- Context menu ----------
+// Places the menu at (x, y) then nudges it back on-screen if it would
+// otherwise overflow past the right/bottom edge - on mobile especially, a
+// menu opened from a row near the bottom of a short viewport can now run
+// past the screen entirely (more items were added over time, e.g. the
+// offline-download actions), which without this left its lower entries
+// unreachable rather than just visually tight.
+function positionContextMenu(x, y) {
+  contextMenu.style.left = x + 'px';
+  contextMenu.style.top = y + 'px';
+  const margin = 8;
+  const rect = contextMenu.getBoundingClientRect();
+  const overflowX = rect.right - (window.innerWidth - margin);
+  const overflowY = rect.bottom - (window.innerHeight - margin);
+  if (overflowX > 0) contextMenu.style.left = Math.max(margin, x - overflowX) + 'px';
+  if (overflowY > 0) contextMenu.style.top = Math.max(margin, y - overflowY) + 'px';
+}
+
 function renderMenuOptions(options) {
   contextMenu.innerHTML = '';
   options.forEach(opt => {
@@ -801,14 +817,25 @@ function showContextMenu(x, y, item) {
   }
   if (item.isAudio) {
     options.push({ icon: EDIT_ICON_SVG, label: 'Edit metadata', action: () => openMetadataEditor([item]) });
+    if (isOfflineDownloaded(item.path)) {
+      options.push({ icon: TRASH_ICON_SVG, label: 'Remove offline download', action: () => removeOfflineDownload(item) });
+    } else {
+      options.push({ icon: DOWNLOAD_ICON_SVG, label: 'Download for offline', action: () => downloadTrackForOffline(item) });
+    }
+  }
+  if (item.isDir) {
+    if (isFolderFullyOffline(item.path)) {
+      options.push({ icon: TRASH_ICON_SVG, label: 'Remove offline download', action: () => removeFolderOfflineDownload(item) });
+    } else {
+      options.push({ icon: DOWNLOAD_ICON_SVG, label: 'Download folder for offline', action: () => downloadFolderForOffline(item) });
+    }
   }
   options.push({ icon: RENAME_ICON_SVG, label: 'Rename', action: () => renameItem(item) });
   options.push({ icon: FOLDER_ICON_SVG, label: 'Move', action: () => stageMove([item]) });
   options.push({ icon: TRASH_ICON_SVG, label: 'Delete', action: () => deleteItem(item) });
   renderMenuOptions(options);
-  contextMenu.style.left = x + 'px';
-  contextMenu.style.top = y + 'px';
   contextMenu.classList.remove('hidden');
+  positionContextMenu(x, y);
 }
 function hideContextMenu() { contextMenu.classList.add('hidden'); }
 document.addEventListener('click', (e) => {
@@ -867,19 +894,23 @@ async function showAddToPlaylistMenuMulti(items) {
 }
 function showMultiContextMenu(x, y, items) {
   const audioItems = items.filter(i => i.isAudio);
+  const dirItems = items.filter(i => i.isDir);
   const options = [
     { icon: PLUS_ICON_SVG, label: `Add ${items.length} to queue`, action: () => addAllToQueue(items) },
     { icon: PLAYLIST_ICON_SVG, label: 'Add to playlist...', action: () => showAddToPlaylistMenuMulti(items) }
   ];
   if (audioItems.length) {
     options.push({ icon: EDIT_ICON_SVG, label: `Edit metadata (${audioItems.length})`, action: () => openMetadataEditor(audioItems) });
+    options.push({ icon: DOWNLOAD_ICON_SVG, label: `Download ${audioItems.length} for offline`, action: () => audioItems.forEach(i => downloadTrackForOffline(i)) });
+  }
+  if (dirItems.length) {
+    options.push({ icon: DOWNLOAD_ICON_SVG, label: `Download ${dirItems.length} folder${dirItems.length === 1 ? '' : 's'} for offline`, action: () => dirItems.forEach(i => downloadFolderForOffline(i)) });
   }
   options.push({ icon: FOLDER_ICON_SVG, label: 'Move', action: () => stageMove(items) });
   options.push({ icon: TRASH_ICON_SVG, label: `Delete ${items.length} items`, action: () => deleteItems(items) });
   renderMenuOptions(options);
-  contextMenu.style.left = x + 'px';
-  contextMenu.style.top = y + 'px';
   contextMenu.classList.remove('hidden');
+  positionContextMenu(x, y);
 }
 
 async function showAddToPlaylistMenu(item) {
