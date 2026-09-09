@@ -210,6 +210,8 @@ function showToast(msg) {
 // ---------- Lyrics ----------
 let currentLyrics = null; // { synced, lines: [{time, text}] } or null
 let lyricsAutoScroll = true;
+let lyricsTouchPausedUntil = 0; // Date.now() timestamp; touching lyrics pauses auto-scroll until this time
+let lyricsAutoScrollJump = false; // when true, next resumed auto-scroll snaps instantly instead of animating
 let lyricsBoxOpen = false;
 let lyricsTrackPath = null; // guards against a slow fetch resolving after the track changed again
 
@@ -307,6 +309,7 @@ function updateLyricsSync() {
   // reads on web (unchanged), polled cache on native.
   const t = currentTimeSec();
   const dur = durationSec();
+  const lyricsAutoScrollActive = lyricsAutoScroll && Date.now() >= lyricsTouchPausedUntil;
 
   if (currentLyrics.synced) {
     if (!currentLyrics.interpolatedLines && dur && isFinite(dur)) {
@@ -322,10 +325,11 @@ function updateLyricsSync() {
     for (let i = 0; i < children.length; i++) {
       children[i].classList.toggle('active', i === activeIdx);
     }
-    if (lyricsAutoScroll && activeIdx >= 0 && children[activeIdx]) {
-      children[activeIdx].scrollIntoView({ block: 'center', behavior: 'smooth' });
+    if (lyricsAutoScrollActive && activeIdx >= 0 && children[activeIdx]) {
+      children[activeIdx].scrollIntoView({ block: 'center', behavior: lyricsAutoScrollJump ? 'auto' : 'smooth' });
+      lyricsAutoScrollJump = false;
     }
-  } else if (lyricsAutoScroll && dur && isFinite(dur)) {
+  } else if (lyricsAutoScrollActive && dur && isFinite(dur)) {
     // No per-line timing available - scroll proportionally to overall song progress.
     const scrollable = lyricsContentEl.scrollHeight - lyricsContentEl.clientHeight;
     if (scrollable > 0) lyricsContentEl.scrollTop = (t / dur) * scrollable;
@@ -359,6 +363,48 @@ lyricsScrollModeBtn.addEventListener('click', () => {
   updateScrollModeBtn();
 });
 updateScrollModeBtn();
+
+// A finger touch on the lyrics list means the user is scrolling manually -
+// pause auto-scroll for 5s, refreshed on every touch, without flipping the
+// persistent auto/manual toggle above.
+let lyricsTouchingClassTimer = null;
+lyricsContentEl.addEventListener('touchstart', () => {
+  lyricsTouchPausedUntil = Date.now() + 3000;
+  lyricsAutoScrollJump = true;
+  // Kill any in-flight CSS smooth-scroll animation so it can't fight the
+  // user's finger and make the pause look like it's not taking effect.
+  lyricsContentEl.classList.add('touching');
+  clearTimeout(lyricsTouchingClassTimer);
+  lyricsTouchingClassTimer = setTimeout(() => {
+    lyricsContentEl.classList.remove('touching');
+  }, 3000);
+});
+
+// Desktop: click-and-drag on the lyrics list to scroll it, same as touch.
+let lyricsDragActive = false;
+let lyricsDragStartY = 0;
+let lyricsDragStartScrollTop = 0;
+lyricsContentEl.addEventListener('mousedown', (e) => {
+  lyricsDragActive = true;
+  lyricsDragStartY = e.clientY;
+  lyricsDragStartScrollTop = lyricsContentEl.scrollTop;
+  lyricsContentEl.classList.add('dragging');
+});
+window.addEventListener('mousemove', (e) => {
+  if (!lyricsDragActive) return;
+  if (lyricsAutoScroll) { lyricsAutoScroll = false; updateScrollModeBtn(); }
+  lyricsContentEl.scrollTop = lyricsDragStartScrollTop - (e.clientY - lyricsDragStartY);
+});
+window.addEventListener('mouseup', () => {
+  if (!lyricsDragActive) return;
+  lyricsDragActive = false;
+  lyricsContentEl.classList.remove('dragging');
+});
+
+// Mouse wheel / trackpad scroll on the lyrics list also disables auto-scroll.
+lyricsContentEl.addEventListener('wheel', () => {
+  if (lyricsAutoScroll) { lyricsAutoScroll = false; updateScrollModeBtn(); }
+});
 
 lyricsEditBtn.addEventListener('click', () => {
   const track = queue[queueIndex];

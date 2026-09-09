@@ -750,6 +750,15 @@ document.addEventListener('keydown', (e) => {
 
   if (e.altKey) return;
 
+  if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+    e.preventDefault();
+    const delta = e.key === 'ArrowUp' ? 5 : -5;
+    const newValue = Math.max(0, Math.min(100, Number(volumeBar.value) + delta));
+    volumeBar.value = newValue;
+    volumeBar.dispatchEvent(new Event('input'));
+    return;
+  }
+
   // STEP 2: durationSec()/currentTimeSec() are playback.js helpers - on web
   // they're plain audioEl reads (unchanged), on native they read the
   // adapter's polled cache (see the seek-bar section of playback.js). Seeking

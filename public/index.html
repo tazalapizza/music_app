@@ -218,6 +218,20 @@
         </button>
         <div id="lyricsBox" class="lyrics-box">
           <div id="lyricsResizeHandle" class="lyrics-resize-handle" title="Drag to resize"></div>
+          <div class="panel-body">
+            <div class="panel-tabs">
+              <button id="panelTabLyrics" class="panel-tab-btn on" title="Lyrics">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h9l4 4v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"></path><path d="M15 3v4h4"></path><line x1="7.5" y1="12" x2="12.5" y2="12"></line><line x1="7.5" y1="15" x2="11" y2="15"></line><path d="M14.5 17.2V11l3-0.6v5.8"></path><circle cx="13.2" cy="17.6" r="1.3"></circle><circle cx="16.2" cy="17" r="1.3"></circle></svg>
+              </button>
+              <button id="panelTabVisualizer" class="panel-tab-btn" title="Visualizer">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="20" x2="4" y2="10"></line><line x1="10" y1="20" x2="10" y2="4"></line><line x1="16" y1="20" x2="16" y2="13"></line><line x1="20" y1="20" x2="20" y2="8"></line></svg>
+              </button>
+              <button id="panelTabMixer" class="panel-tab-btn" title="Mixer">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="4" x2="6" y2="20"></line><circle cx="6" cy="9" r="2"></circle><line x1="12" y1="4" x2="12" y2="20"></line><circle cx="12" cy="15" r="2"></circle><line x1="18" y1="4" x2="18" y2="20"></line><circle cx="18" cy="7" r="2"></circle></svg>
+              </button>
+            </div>
+            <div class="panel-content">
+          <div id="lyricsPane" class="panel-pane">
           <div class="lyrics-box-header">
             <div class="lyrics-header-spacer"></div>
             <div class="lyrics-scroll-toggle-wrap" title="Toggle auto/manual scroll">
@@ -244,6 +258,64 @@
           <div id="lyricsContent" class="lyrics-content">
             <div id="lyricsEmpty" class="lyrics-empty">No lyrics found</div>
             <div id="lyricsLines" class="lyrics-lines"></div>
+          </div>
+          </div>
+            <div id="visualizerPane" class="panel-pane hidden">
+              <div class="visualizer-menu-wrap">
+                <button id="visualizerMenuBtn" class="lyrics-header-icon-btn" title="Visualization style">
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><circle cx="12" cy="5" r="1.8"></circle><circle cx="12" cy="12" r="1.8"></circle><circle cx="12" cy="19" r="1.8"></circle></svg>
+                </button>
+                <div id="visualizerMenu" class="visualizer-menu hidden">
+                  <button class="visualizer-menu-item on" data-style="bars">Bars</button>
+                  <button class="visualizer-menu-item" data-style="mirror">Mirror Bars</button>
+                  <button class="visualizer-menu-item" data-style="wave">Waveform</button>
+                  <button class="visualizer-menu-item" data-style="circular">Circular</button>
+                </div>
+              </div>
+              <canvas id="visualizerCanvas"></canvas>
+            </div>
+            <div id="mixerPane" class="panel-pane hidden">
+              <div class="mixer-col mixer-col-pitch">
+                <div class="mixer-pitch-row">
+                  <label class="mixer-pitch-toggle" title="Keep pitch the same regardless of speed">
+                    <input id="mixerPreservePitch" type="checkbox" checked>
+                    <span>Preserve pitch</span>
+                  </label>
+                  <div class="mixer-band">
+                    <span id="mixerPitchValue" class="mixer-band-value">0 st</span>
+                    <input id="mixerPitch" type="range" min="-12" max="12" step="1" value="0" orient="vertical" disabled>
+                    <span class="mixer-band-label">Pitch</span>
+                  </div>
+                </div>
+              </div>
+              <div class="mixer-col mixer-col-eq">
+                <div class="mixer-eq-row">
+                  <div class="mixer-band">
+                    <span id="mixerBassValue" class="mixer-band-value">0 dB</span>
+                    <input id="mixerBass" type="range" min="-12" max="12" step="1" value="0" orient="vertical">
+                    <span class="mixer-band-label">Bass</span>
+                  </div>
+                  <div class="mixer-band">
+                    <span id="mixerMidValue" class="mixer-band-value">0 dB</span>
+                    <input id="mixerMid" type="range" min="-12" max="12" step="1" value="0" orient="vertical">
+                    <span class="mixer-band-label">Mid</span>
+                  </div>
+                  <div class="mixer-band">
+                    <span id="mixerTrebleValue" class="mixer-band-value">0 dB</span>
+                    <input id="mixerTreble" type="range" min="-12" max="12" step="1" value="0" orient="vertical">
+                    <span class="mixer-band-label">Treble</span>
+                  </div>
+                </div>
+              </div>
+              <div class="mixer-col mixer-col-speed">
+                <div class="mixer-band">
+                  <span id="mixerSpeedValue" class="mixer-band-value">1.0x</span>
+                  <input id="mixerSpeed" type="range" min="0" max="2" step="0.05" value="1" orient="vertical">
+                  <span class="mixer-band-label">Speed</span>
+                </div>
+              </div>
+            </div>
+            </div>
           </div>
         </div>
       </div>
@@ -596,6 +668,7 @@
 
   <div id="toast" class="toast"></div>
 
+<script src="js/vendor-signalsmith-stretch.js"></script>
 <script src="js/state.js"></script>
     <script src="js/native-audio-adapter.js"></script>
     <script src="js/system-volume-adapter.js"></script>
@@ -608,6 +681,7 @@
     <script src="js/filemanagement.js"></script>
     <script src="js/uploads.js"></script>
     <script src="js/settings-auth-toast-lyrics.js"></script>
+    <script src="js/panel-tabs.js"></script>
     <script src="js/metadata-editor.js"></script>
     <script src="js/layout-init.js"></script>
     <script src="js/albums-carousel.js"></script>

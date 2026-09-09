@@ -79,7 +79,8 @@ document.getElementById('closePlayerBtn').addEventListener('click', () => {
 
 const speedBtn = document.getElementById('speedBtn');
 const speedMenu = document.getElementById('speedMenu');
-function updateSpeedBtn() { speedBtn.textContent = speeds[speedIndex] + 'x'; }
+function setSpeedBtnLabel(rate) { speedBtn.textContent = rate + 'x'; }
+function updateSpeedBtn() { setSpeedBtnLabel(speeds[speedIndex]); }
 
 function renderSpeedMenu() {
   speedMenu.innerHTML = '';
@@ -89,9 +90,7 @@ function renderSpeedMenu() {
     btn.className = i === speedIndex ? 'active' : '';
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
-      speedIndex = i;
-      NativeAudioAdapter.setRate(speeds[speedIndex]);
-      updateSpeedBtn();
+      setPlaybackSpeed(sp);
       speedMenu.classList.add('hidden');
     });
     speedMenu.appendChild(btn);

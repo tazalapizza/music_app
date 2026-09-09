@@ -177,8 +177,9 @@
 #playPauseBtn { width: 28px; }
 #playPauseBtn .icon-play.hidden,
 #playPauseBtn .icon-pause.hidden { display: none; }
-#loopBtn { width: 48px; }
-.loop-label { font-size: 10px; font-weight: 700; margin-left: 2px; vertical-align: 1px; }
+#loopBtn { width: 48px; position: relative; }
+#loopBtn svg { position: absolute; inset: 0; margin: auto; }
+.loop-label { position: relative; z-index: 1; font-size: 8px; font-weight: 700; margin-left: 0; }
 #speedBtn { font-size: 12px; font-weight: 600; width: 36px; }
 .speed-wrap { position: relative; display: inline-flex; }
 .speed-menu {

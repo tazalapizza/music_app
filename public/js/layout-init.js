@@ -616,7 +616,7 @@ miniPlayerEl.addEventListener('click', (e) => {
     // Let range sliders, buttons, and the lyrics scroll area handle their
     // own touch/drag behavior untouched — only bare background/art/text
     // areas of the bar start a swipe.
-    if (e.target.closest('input[type="range"], button, #lyricsContent, .lyrics-box-wrap')) return;
+    if (e.target.closest('input[type="range"], button, #lyricsContent, .lyrics-box-wrap, #mobileLyricsView')) return;
     startY = e.clientY;
     startTime = performance.now();
     dragging = true;
@@ -1207,9 +1207,7 @@ mirrorButton(document.getElementById('fpDeleteBtn'), document.getElementById('de
 const fpSpeedBtn = document.getElementById('fpSpeedBtn');
 const realSpeedBtn = document.getElementById('speedBtn');
 fpSpeedBtn.addEventListener('click', () => {
-  speedIndex = (speedIndex + 1) % speeds.length;
-  NativeAudioAdapter.setRate(speeds[speedIndex]);
-  updateSpeedBtn();
+  setPlaybackSpeed(speeds[(speedIndex + 1) % speeds.length]);
 });
 new MutationObserver(() => { fpSpeedBtn.textContent = realSpeedBtn.textContent; })
   .observe(realSpeedBtn, { childList: true, characterData: true, subtree: true });
@@ -1242,6 +1240,7 @@ new MutationObserver(syncFpVolumeBar)
 // by side with theirs, rather than intercepting the functions themselves.
 const mobileLyricsEmpty = document.getElementById('mobileLyricsEmpty');
 const mobileLyricsLines = document.getElementById('mobileLyricsLines');
+const mobileLyricsView = document.getElementById('mobileLyricsView');
 const fpLyricsBtn = document.getElementById('fpLyricsBtn');
 const desktopLyricsLinesEl = document.getElementById('lyricsLines');
 const desktopLyricsEmptyEl = document.getElementById('lyricsEmpty');
@@ -1261,9 +1260,11 @@ new MutationObserver(mirrorLyricsContent).observe(desktopLyricsLinesEl, { childL
 new MutationObserver(mirrorLyricsContent).observe(desktopLyricsEmptyEl, { attributes: true, attributeFilter: ['class'] });
 mirrorLyricsContent();
 
-// Mobile is always auto-scroll (no manual/auto switch exposed), so this
-// mirrors the same "active line" highlight desktop's updateLyricsSync
-// computes, using the same currentLyrics global it maintains.
+// Mirrors the same "active line" highlight desktop's updateLyricsSync
+// computes, using the same currentLyrics global it maintains. Auto-scroll
+// here shares the same touch-pause state (lyricsTouchPausedUntil /
+// lyricsAutoScrollJump) as the desktop panel in settings-auth-toast-lyrics.js,
+// so touching this view pauses its own auto-scroll the same way.
 function updateMobileLyricsSync() {
   if (!currentLyrics || !currentLyrics.lines.length || !mobileLyricsLines.children.length) return;
   const t = currentTimeSec(); // STEP 2: playback.js helper - audioEl.currentTime on web, polled cache on native
@@ -1277,14 +1278,21 @@ function updateMobileLyricsSync() {
   for (let i = 0; i < children.length; i++) {
     children[i].classList.toggle('active', i === activeIdx);
   }
+  if (Date.now() < lyricsTouchPausedUntil) return;
   if (activeIdx >= 0 && children[activeIdx]) {
-    children[activeIdx].scrollIntoView({ block: 'center', behavior: 'smooth' });
+    children[activeIdx].scrollIntoView({ block: 'center', behavior: lyricsAutoScrollJump ? 'auto' : 'smooth' });
+    lyricsAutoScrollJump = false;
   }
 }
 audioEl.addEventListener('timeupdate', updateMobileLyricsSync);
 // Native has no timeupdate event - piggyback on NativeAudioAdapter's real
 // 'currentTime' event instead (see comment on updateFpTimeDisplay above).
 NativeAudioAdapter.onTimeUpdate(updateMobileLyricsSync);
+
+mobileLyricsView.addEventListener('touchstart', () => {
+  lyricsTouchPausedUntil = Date.now() + 3000;
+  lyricsAutoScrollJump = true;
+});
 
 fpLyricsBtn.addEventListener('click', () => {
   const showing = document.getElementById('fpArtRow').classList.toggle('showing-lyrics');

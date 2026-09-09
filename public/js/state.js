@@ -17,6 +17,20 @@ let loopMode = 'off'; // 'off' | 'all' | 'one'
 let playerArtTrackPath = null; // guards against a slow-loading image resolving after the track changed again
 const speeds = [0.5, 1, 1.5, 2];
 let speedIndex = 1;
+// Single choke point for changing playback speed, called by every UI that
+// can set it (the discrete speedBtn/speedMenu and mobile fpSpeedBtn in
+// controls.js/layout-init.js, and the mixer's continuous slider in
+// panel-tabs.js) so they can never drift out of sync with each other -
+// each previously called NativeAudioAdapter.setRate directly and updated
+// only its own display. speedIndex only tracks the nearest discrete step,
+// for highlighting the right entry in the discrete speedMenu - the button
+// label itself always shows the real rate, continuous or not.
+function setPlaybackSpeed(rate) {
+  NativeAudioAdapter.setRate(rate);
+  speedIndex = speeds.reduce((best, sp, i) => Math.abs(sp - rate) < Math.abs(speeds[best] - rate) ? i : best, 0);
+  if (typeof setSpeedBtnLabel === 'function') setSpeedBtnLabel(rate);
+  if (typeof syncMixerSpeedUI === 'function') syncMixerSpeedUI(rate);
+}
 // Capped LRU for track metadata (title/artist/duration/etc). Wrapped in a
 // Proxy so every existing call site (metaCache[path], delete metaCache[path])
 // keeps working unchanged, while eviction happens underneath via a Map that
@@ -79,7 +93,13 @@ const DEFAULT_SETTINGS = {
   hideNonMusic: false,
   mobileFileRowView: 'name', // 'name' | 'meta' — mobile file list row display (see filelist.js/topbar toggle)
   replayGainEnabled: true,
-  maxItemsLoad: 20 // rows loaded per chunk in file lists/queue/playlists; 0 = unlimited (load everything at once)
+  maxItemsLoad: 20, // rows loaded per chunk in file lists/queue/playlists; 0 = unlimited (load everything at once)
+  eqBass: 0, // dB, -12..12 - see ensureAudioGraph()'s bassNode
+  eqMid: 0,
+  eqTreble: 0,
+  visualizerStyle: 'bars', // 'bars' | 'mirror' | 'wave' | 'circular' - see panel-tabs.js's VISUALIZER_DRAWERS
+  preservePitch: true, // when true, speed changes use the browser's built-in playbackRate pitch correction; when false, pitchSemitones (below) applies an independent shift via ensurePitchStretchNode()
+  pitchSemitones: 0 // -12..12, only active while preservePitch is false - see ensurePitchStretchNode()
 };
 let settings = { ...DEFAULT_SETTINGS };
 function loadSettings() {
@@ -95,16 +115,93 @@ loadSettings();
 
 const audioEl = document.getElementById('audioEl');
 
-// ---------- ReplayGain volume normalization ----------
+// ---------- ReplayGain volume normalization / EQ / visualizer ----------
+// Single shared WebAudio graph (an HTMLMediaElement can only be captured by
+// createMediaElementSource once), used by ReplayGain, the mixer's 3-band EQ,
+// and the visualizer's AnalyserNode:
+//   source -> bassNode -> midNode -> trebleNode -> [pitchStretchNode] -> analyserNode -> gainNode -> destination
+// pitchStretchNode (see ensurePitchStretchNode()) is spliced in later and
+// lazily, since it loads a WASM AudioWorklet - only paid for if the mixer's
+// pitch control is actually used, rather than on every track load.
 let gainNode = null;
 let audioCtx = null;
+let bassNode = null, midNode = null, trebleNode = null, analyserNode = null;
+let pitchStretchNode = null;
 const RG_MAX_BOOST_DB = 6; // don't boost a quiet track more than this, to avoid clipping/distortion
 function ensureAudioGraph() {
   if (gainNode) return;
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   const source = audioCtx.createMediaElementSource(audioEl);
+  bassNode = audioCtx.createBiquadFilter();
+  bassNode.type = 'lowshelf';
+  bassNode.frequency.value = 200;
+  bassNode.gain.value = settings.eqBass;
+  midNode = audioCtx.createBiquadFilter();
+  midNode.type = 'peaking';
+  midNode.frequency.value = 1000;
+  midNode.Q.value = 0.8;
+  midNode.gain.value = settings.eqMid;
+  trebleNode = audioCtx.createBiquadFilter();
+  trebleNode.type = 'highshelf';
+  trebleNode.frequency.value = 3000;
+  trebleNode.gain.value = settings.eqTreble;
+  analyserNode = audioCtx.createAnalyser();
+  analyserNode.fftSize = 256;
   gainNode = audioCtx.createGain();
-  source.connect(gainNode).connect(audioCtx.destination);
+  source.connect(bassNode).connect(midNode).connect(trebleNode).connect(analyserNode).connect(gainNode).connect(audioCtx.destination);
+}
+function setEQBand(band, db) {
+  ensureAudioGraph();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  const clamped = Math.max(-12, Math.min(12, db));
+  if (band === 'bass') { settings.eqBass = clamped; bassNode.gain.value = clamped; }
+  else if (band === 'mid') { settings.eqMid = clamped; midNode.gain.value = clamped; }
+  else if (band === 'treble') { settings.eqTreble = clamped; trebleNode.gain.value = clamped; }
+  saveSettings();
+}
+
+// Lazily creates SignalsmithStretch's live-input AudioWorklet node, so the
+// mixer's pitch slider can shift pitch independent of playbackRate (the
+// browser's own preservesPitch ties them together and offers no way to
+// decouple them - see panel-tabs.js's mixer section for the fuller
+// explanation). The node is created once and left permanently connected in
+// parallel (trebleNode -> pitchStretchNode -> analyserNode), NOT spliced
+// into the main trebleNode -> analyserNode path - an inactive live-input
+// stretch node outputs silence rather than passing audio through
+// unchanged, so swapping the main path through it would mute playback
+// every time preserve-pitch is re-enabled. setPitchStretchActive() instead
+// toggles which of the two parallel paths is actually connected to
+// analyserNode. Returns a Promise resolving to the node; safe to call
+// multiple times, only creates it once.
+let pitchStretchNodePromise = null;
+function ensurePitchStretchNode() {
+  ensureAudioGraph();
+  if (pitchStretchNodePromise) return pitchStretchNodePromise;
+  pitchStretchNodePromise = SignalsmithStretch(audioCtx).then((node) => {
+    trebleNode.connect(node);
+    node.start();
+    pitchStretchNode = node;
+    return node;
+  });
+  return pitchStretchNodePromise;
+}
+// preserve=true: normal trebleNode -> analyserNode path (pitch tied to
+// playbackRate via the browser). preserve=false: trebleNode -> pitchStretchNode
+// -> analyserNode instead, for independent pitch control.
+function setPitchStretchActive(active) {
+  ensurePitchStretchNode().then((node) => {
+    // disconnect(destination) throws if that specific connection doesn't
+    // currently exist (e.g. the first time this runs, node was never
+    // connected to analyserNode yet) - each call is independent, so one
+    // throwing must not stop the other disconnect/connect calls below from
+    // running, or the graph is left half-rewired with no path to
+    // analyserNode at all (total silence).
+    try { trebleNode.disconnect(analyserNode); } catch {}
+    try { node.disconnect(analyserNode); } catch {}
+    if (active) node.connect(analyserNode);
+    else trebleNode.connect(analyserNode);
+    node.schedule({ active, semitones: settings.pitchSemitones });
+  });
 }
 // ReplayGain is temporarily disabled on *web* mobile viewports: it requires
 // permanently rerouting audio through a WebAudio graph (see
