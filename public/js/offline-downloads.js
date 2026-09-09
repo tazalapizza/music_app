@@ -285,7 +285,7 @@ async function readBlobWithProgress(res, onProgress, totalOverride) {
     received += value.length;
     onProgress(Math.min(received / total, 1));
   }
-  return new Blob(chunks);
+  return new Blob(chunks, { type: res.headers.get('Content-Type') || '' });
 }
 
 async function downloadTrackForOffline(item, opts = {}) {

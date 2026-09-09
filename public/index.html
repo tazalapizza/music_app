@@ -672,6 +672,8 @@
       <div class="modal-actions">
         <button id="settingsCloseBtn">Close</button>
       </div>
+
+      <div class="settings-build-version">8655fa3-fix1</div>
     </div>
   </div>
 
@@ -696,7 +698,9 @@
     <script src="js/layout-init.js"></script>
     <script src="js/albums-carousel.js"></script>
 <script>
-  if ('serviceWorker' in navigator) {
+  const isNativeApp = (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) || false;
+  const isInstalledPwa = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+  if ('serviceWorker' in navigator && (isNativeApp || isInstalledPwa)) {
     navigator.serviceWorker.register('sw.js');
     // sw.js's skipWaiting() lets a new worker activate immediately instead
     // of waiting for every tab to close - reloading here once it takes

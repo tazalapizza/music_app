@@ -55,6 +55,7 @@
   height: 18px;
 }
 .settings-modal .modal-actions { margin-top: 6px; }
+.settings-build-version { text-align: right; margin-top: 8px; font-size: 11px; color: #888; }
 .settings-row-buttons { justify-content: center; gap: 8px; border-bottom: none; padding-top: 14px; }
 .settings-row-buttons button {
   background: #2a2a2e;
