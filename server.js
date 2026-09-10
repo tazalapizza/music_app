@@ -42,6 +42,8 @@ process.on('unhandledRejection', (err) => {
 
 // ---- AUTH: single shared password gates write access; browsing/streaming stays open to everyone ----
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
+const LASTFM_API_KEY = process.env.LASTFM_API_KEY || '';
+const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY || '';
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const sessions = new Map(); // token -> expiry timestamp
 
@@ -1352,6 +1354,171 @@ app.post('/api/lyrics/fetch', async (req, res) => {
 });
 
 
+// Proxies Last.fm (https://www.last.fm/api) so the browser doesn't need CORS
+// access and the API key stays server-side. Always resolves to actual songs:
+// track.getsimilar when Last.fm has similar-track data for this exact
+// recording, otherwise artist.getsimilar + artist.getTopTracks per similar
+// artist (for obscure/self-released tracks with no track-level data).
+// Excludes both the current track's artist and album artist from results,
+// so a feat./collab credit on either side never recommends the same act.
+app.get('/api/recommendations', async (req, res) => {
+  try {
+    if (!LASTFM_API_KEY) return res.status(501).json({ error: 'LASTFM_API_KEY is not configured' });
+    const rel = req.query.path;
+    const full = safeResolve(rel);
+    const mm = await import('music-metadata');
+    const parsed = await mm.parseFile(full, { duration: false, skipCovers: true });
+    const title = parsed.common.title || '';
+    const artist = parsed.common.artist || parsed.common.albumartist || '';
+    const albumArtist = parsed.common.albumartist || '';
+    if (!artist) return res.json({ found: false });
+
+    // Splits a credit string into its individual acts so a collab credit
+    // like "BABYMETAL & Electric Callboy" is excluded/matched as both
+    // "babymetal" and "electric callboy" rather than compared whole - an
+    // exact-string check would let a candidate track credited to the same
+    // pairing (or the reverse: "Electric Callboy & BABYMETAL") slip through
+    // as if it were a different artist.
+    function splitArtistNames(name) {
+      return (name || '')
+        .split(/\s*(?:[&,;\/]|\bx\b|\bvs\.?|\bfeat\.?|\bft\.?|\bfeaturing\b|\bwith\b)\s*/i)
+        .map(s => s.trim().toLowerCase())
+        .filter(Boolean);
+    }
+    const excludedArtists = new Set([...splitArtistNames(artist), ...splitArtistNames(albumArtist)]);
+    const isExcludedArtist = (name) => splitArtistNames(name).some(n => excludedArtists.has(n));
+
+    // A candidate can be credited to a different lead artist in Last.fm's
+    // artist field while its title still names the excluded act as a
+    // feature/remix credit - e.g. Electric Callboy's "Kingslayer (feat.
+    // BABYMETAL)" when the current track is by BABYMETAL. Checking the
+    // artist field alone misses this; the title needs its own check against
+    // the excluded set (not just the candidate's own artist tokens).
+    function titleContainsExcludedArtist(t) {
+      const titleLower = (t.title || '').toLowerCase();
+      return [...excludedArtists].some(n => n.length > 1 && titleLower.includes(n));
+    }
+
+    // Keeps only the first candidate seen per artist, so the list never
+    // shows the same act twice even when Last.fm ranks several of their
+    // songs as similar.
+    function onePerArtist(list) {
+      const seen = new Set();
+      return list.filter(t => {
+        const key = (t.artist || '').trim().toLowerCase();
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    }
+
+    async function lastfmGet(method, params) {
+      const qs = new URLSearchParams({ method, api_key: LASTFM_API_KEY, format: 'json', ...params });
+      const r = await fetch(`https://ws.audioscrobbler.com/2.0/?${qs}`);
+      if (!r.ok) return null;
+      const data = await r.json();
+      if (data.error) return null;
+      return data;
+    }
+
+    // track.getsimilar's own track/artist image is almost always Last.fm's
+    // generic placeholder rather than real album art, and it carries no
+    // album name at all - track.getInfo (per-track) has both, so each
+    // candidate is enriched with a second lookup, run in parallel.
+    async function enrichTrack(t) {
+      const info = await lastfmGet('track.getInfo', { artist: t.artist, track: t.title, autocorrect: '1' });
+      const album = info && info.track && info.track.album;
+      return {
+        title: t.title,
+        artist: t.artist,
+        album: (album && album.title) || null,
+        url: t.url,
+        image: (album && album.image && album.image.find(i => i.size === 'extralarge')?.['#text']) || t.image
+      };
+    }
+
+    let tracks = [];
+    if (title) {
+      const data = await lastfmGet('track.getsimilar', { artist, track: title, limit: '20', autocorrect: '1' });
+      const similar = data && data.similartracks && data.similartracks.track;
+      if (Array.isArray(similar)) {
+        tracks = similar
+          .filter(t => !isExcludedArtist(t.artist && t.artist.name))
+          .map(t => ({
+            title: t.name,
+            artist: t.artist && t.artist.name,
+            url: t.url,
+            image: (t.image && t.image.find(i => i.size === 'large')?.['#text']) || null
+          }))
+          .filter(t => !titleContainsExcludedArtist(t));
+        tracks = onePerArtist(tracks).slice(0, 12);
+        tracks = await Promise.all(tracks.map(enrichTrack));
+      }
+    }
+    if (!tracks.length) {
+      const data = await lastfmGet('artist.getsimilar', { artist, limit: '15', autocorrect: '1' });
+      const similarArtists = data && data.similarartists && data.similarartists.artist;
+      if (Array.isArray(similarArtists)) {
+        const candidateArtists = similarArtists
+          .filter(a => !isExcludedArtist(a.name))
+          .slice(0, 12);
+        // One top track per similar artist, run in parallel, so the panel
+        // still lists actual songs rather than bare artist names - this
+        // already guarantees one-per-artist by construction, unlike the
+        // track.getsimilar path above which needs onePerArtist() explicitly.
+        const topTrackLists = await Promise.all(candidateArtists.map(a =>
+          lastfmGet('artist.gettoptracks', { artist: a.name, autocorrect: '1', limit: '5' })
+        ));
+        for (const data of topTrackLists) {
+          const top = data && data.toptracks && data.toptracks.track;
+          const first = Array.isArray(top)
+            ? top.map(t => ({ title: t.name, artist: t.artist && t.artist.name, url: t.url, image: (t.image && t.image.find(i => i.size === 'large')?.['#text']) || null }))
+                 .find(t => !isExcludedArtist(t.artist) && !titleContainsExcludedArtist(t))
+            : null;
+          if (first) tracks.push(first);
+        }
+        tracks = await Promise.all(tracks.slice(0, 12).map(enrichTrack));
+      }
+    }
+    res.json({ found: tracks.length > 0, tracks });
+  } catch (err) {
+    logIssue(`GET /api/recommendations?path=${req.query.path || ''} failed: ${err.message}`);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Resolves an artist/title pair to a specific YouTube video via a single
+// YouTube Data API search.list call, biased toward the artist's
+// auto-generated "topic" upload (plain studio track, no music
+// video/live/remix) by including "topic" as a search term. Returns the
+// first result as-is - no scanning, no view-count ranking.
+app.get('/api/youtube-link', async (req, res) => {
+  try {
+    if (!YOUTUBE_API_KEY) return res.status(501).json({ error: 'YOUTUBE_API_KEY is not configured' });
+    const artist = (req.query.artist || '').toString();
+    const title = (req.query.title || '').toString();
+    if (!artist || !title) return res.status(400).json({ error: 'artist and title are required' });
+
+    const qs = new URLSearchParams({
+      key: YOUTUBE_API_KEY,
+      part: 'snippet',
+      type: 'video',
+      maxResults: '1',
+      q: `${artist} ${title} "topic"`
+    });
+    const r = await fetch(`https://www.googleapis.com/youtube/v3/search?${qs}`);
+    const data = await r.json();
+    if (!r.ok) return res.status(502).json({ error: (data.error && data.error.message) || 'YouTube API request failed' });
+
+    const best = (data.items || [])[0];
+    if (!best) return res.json({ found: false });
+    res.json({ found: true, url: `https://www.youtube.com/watch?v=${best.id.videoId}`, title: best.snippet.title });
+  } catch (err) {
+    logIssue(`GET /api/youtube-link?artist=${req.query.artist || ''}&title=${req.query.title || ''} failed: ${err.message}`);
+    res.status(400).json({ error: err.message });
+  }
+});
+
 // Looks up tag metadata on MusicBrainz from a filename (parsed as "Artist -
 // Title") and the file's own duration, since that's often all a stray
 // download has going for it. Duration is used to rank/filter candidates
@@ -1786,10 +1953,14 @@ app.post('/api/upload', requireAuth, (req, res, next) => {
     await fsp.mkdir(destFull, { recursive: true });
     await fixPerms(destFull);
     for (const f of req.files) {
-      const target = path.join(destFull, f.originalname);
+      // busboy decodes multipart filenames as latin1 regardless of their
+      // actual encoding, so a UTF-8 name (e.g. non-Latin scripts) comes
+      // through mojibake'd - re-decoding those bytes as UTF-8 recovers it.
+      const originalname = Buffer.from(f.originalname, 'latin1').toString('utf8');
+      const target = path.join(destFull, originalname);
       await moveFile(f.path, target);
       await ensureReplayGainTags(target);
-      metaCache.delete(path.join(destFolder, f.originalname));
+      metaCache.delete(path.join(destFolder, originalname));
     }
     markLibraryDirty();
     res.json({ ok: true });

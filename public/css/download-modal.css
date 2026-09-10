@@ -1,0 +1,128 @@
+/* ---------------------------------------------------------------------------
+   download-modal.css — "Add download" modal: file input, tag fields, and
+   the browsable destination-folder tree.
+   --------------------------------------------------------------------------- */
+
+.download-modal { width: 480px; max-height: 80vh; display: flex; flex-direction: column; }
+.download-modal .modal-actions button:disabled { opacity: 0.4; cursor: default; pointer-events: none; }
+.download-title { text-align: center; font-weight: 600; margin-bottom: 12px; }
+.download-body { overflow-y: auto; }
+.download-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+.download-row label { font-size: 12px; color: #c8c8ce; }
+.download-row input[type="text"] {
+  padding: 8px;
+  border-radius: 6px;
+  border: 1px solid #3a3a3e;
+  background: #1e1e21;
+  color: #e8e8ea;
+}
+#downloadFileBtn {
+  background: #2a2a2e;
+  border: none;
+  color: #e8e8ea;
+  padding: 5px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 400;
+  white-space: nowrap;
+  align-self: flex-start;
+  max-width: 100%;
+  overflow: hidden;
+}
+#downloadFileBtnLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: bottom;
+}
+@media (hover: hover) { #downloadFileBtn:hover { background: #35353a; } }
+.download-folder-path {
+  font-size: 12px;
+  color: #e8e8ea;
+  padding: 6px 8px;
+  background: #1e1e21;
+  border-radius: 6px;
+  border: 1px solid #3a3a3e;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.download-folder-tree {
+  height: 200px;
+  overflow-y: auto;
+  border: 1px solid #3a3a3e;
+  border-radius: 6px;
+  background: #1e1e21;
+  padding: 4px;
+}
+.download-folder-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #e8e8ea;
+}
+.download-folder-item:hover { background: #2a2a2e; }
+.download-folder-item.selected { background: color-mix(in srgb, var(--accent-color) 18%, transparent); }
+.download-folder-item svg { flex-shrink: 0; stroke: #a8a8ae; }
+.download-status { font-size: 12px; color: #c8c8ce; min-height: 16px; margin-top: 4px; }
+.download-status.error { color: #e06c6c; }
+
+/* ---------- Combined "upload + tag" layout ----------
+   When the upload modal hands off to the metadata editor right after a
+   successful upload, both overlays are shown at once so together they read
+   as one two-panel popup (upload on the left, metadata editor on the
+   right) rather than two independently-centered modals.
+
+   Each .modal-overlay normally spans the full viewport (inset:0) and
+   centers its own modal within that - two of them both trying to center
+   independently is what previously pushed them to opposite screen edges
+   (flex-end/flex-start each resolved against the FULL viewport width, not
+   against each other) and, since both stayed full-viewport, whichever
+   overlay came later in paint order intercepted clicks meant for the
+   other's modal even outside its own visible modal box.
+
+   The fix: shrink each overlay's hit area down to a centered half-width
+   pane (instead of the full viewport) via left/right/width overrides, so
+   they sit directly adjacent with no overlap and no dead click zones. Each
+   half keeps its own dim background (rather than suppressing one) so both
+   halves of the screen are darkened, not just the left one. */
+body.upload-combo-active #downloadOverlay,
+body.upload-combo-active #metaOverlay {
+  left: 50%;
+  width: 50vw;
+  justify-content: center;
+}
+body.upload-combo-active #downloadOverlay { right: auto; transform: translateX(-100%); justify-content: flex-end; padding-right: 6px; }
+body.upload-combo-active #metaOverlay { justify-content: flex-start; padding-left: 6px; }
+body.upload-combo-active .download-modal { margin: 0; }
+
+/* Whichever side isn't the current step (metadata editor before a file's
+   uploaded, upload panel while tagging is in progress) is shown but inert -
+   dimmed and unclickable - instead of popping in/out of existence. Only the
+   modal itself loses pointer-events; the overlay backdrop keeps them so it
+   still blocks clicks from reaching the page underneath. Dimming uses
+   filter rather than opacity - opacity makes the (opaque) modal blend with
+   whatever renders behind it, which let background page content show
+   through; filter darkens the modal's own already-opaque pixels instead. */
+body.meta-editor-pending #metaOverlay .meta-modal,
+body.upload-locked #downloadOverlay .download-modal {
+  filter: brightness(0.55);
+  pointer-events: none;
+}
+
+@media (max-width: 780px) {
+  .download-modal { width: calc(100vw - 32px); max-width: 420px; }
+  /* No room for side-by-side on mobile - fall back to the meta editor
+     replacing the upload modal like a normal single modal. */
+  body.upload-combo-active #downloadOverlay,
+  body.upload-combo-active #metaOverlay {
+    left: 0; width: 100vw; transform: none; justify-content: center; padding: 0;
+  }
+  body.upload-combo-active #downloadOverlay.hidden { display: none; }
+}

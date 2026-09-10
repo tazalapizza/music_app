@@ -1,7 +1,6 @@
-docker-compose.yml
-Dockerfile
 data/
 node_modules/
+.env
 
 android/*
 !android/app/

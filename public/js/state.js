@@ -101,7 +101,8 @@ const DEFAULT_SETTINGS = {
   eqTreble: 0,
   visualizerStyle: 'bars', // 'bars' | 'mirror' | 'wave' | 'circular' - see panel-tabs.js's VISUALIZER_DRAWERS
   preservePitch: true, // when true, speed changes use the browser's built-in playbackRate pitch correction; when false, pitchSemitones (below) applies an independent shift via ensurePitchStretchNode()
-  pitchSemitones: 0 // -12..12, only active while preservePitch is false - see ensurePitchStretchNode()
+  pitchSemitones: 0, // -12..12, only active while preservePitch is false - see ensurePitchStretchNode()
+  openUploadManagerOnRecommendationClick: true // see recommendations.js's openYoutubeLinkForTrack()
 };
 let settings = { ...DEFAULT_SETTINGS };
 function loadSettings() {

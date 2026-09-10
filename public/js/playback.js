@@ -611,6 +611,7 @@ function playCurrent() {
   updatePlayerArt(track.path);
   updatePlayingHighlight();
   loadLyricsForTrack(track.path);
+  loadRecommendationsForTrack(track.path);
   getMeta(track.path).then(meta => {
     // Stale-response guard: if a newer playCurrent() call has already run
     // since this fetch started, applying this (old) metadata now would

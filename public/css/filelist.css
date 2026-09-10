@@ -94,33 +94,39 @@
 .lib-stats { font-size: 12px; color: #77777d; }
 .lib-link { cursor: pointer; }
 @media (hover: hover) { .lib-link:hover { text-decoration: underline; } }
-.album-strip, .tab-panel, .upload-list {
+.album-strip, .tab-panel, .upload-list, #recommendationsPane, .download-folder-tree {
   scrollbar-width: thin;
   scrollbar-color: transparent transparent;
 }
-.album-strip.scrollbar-active, .tab-panel.scrollbar-active, .upload-list.scrollbar-active {
+.album-strip.scrollbar-active, .tab-panel.scrollbar-active, .upload-list.scrollbar-active,
+#recommendationsPane.scrollbar-active, .download-folder-tree.scrollbar-active {
   scrollbar-color: #35353a transparent;
 }
 .album-strip::-webkit-scrollbar,
-.tab-panel::-webkit-scrollbar, .upload-list::-webkit-scrollbar {
+.tab-panel::-webkit-scrollbar, .upload-list::-webkit-scrollbar,
+#recommendationsPane::-webkit-scrollbar, .download-folder-tree::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 .album-strip::-webkit-scrollbar-track,
-.tab-panel::-webkit-scrollbar-track, .upload-list::-webkit-scrollbar-track {
+.tab-panel::-webkit-scrollbar-track, .upload-list::-webkit-scrollbar-track,
+#recommendationsPane::-webkit-scrollbar-track, .download-folder-tree::-webkit-scrollbar-track {
   background: transparent;
 }
 .album-strip::-webkit-scrollbar-thumb,
-.tab-panel::-webkit-scrollbar-thumb, .upload-list::-webkit-scrollbar-thumb {
+.tab-panel::-webkit-scrollbar-thumb, .upload-list::-webkit-scrollbar-thumb,
+#recommendationsPane::-webkit-scrollbar-thumb, .download-folder-tree::-webkit-scrollbar-thumb {
   background: transparent;
   border-radius: 3px;
 }
 .album-strip.scrollbar-active::-webkit-scrollbar-thumb,
-.tab-panel.scrollbar-active::-webkit-scrollbar-thumb, .upload-list.scrollbar-active::-webkit-scrollbar-thumb {
+.tab-panel.scrollbar-active::-webkit-scrollbar-thumb, .upload-list.scrollbar-active::-webkit-scrollbar-thumb,
+#recommendationsPane.scrollbar-active::-webkit-scrollbar-thumb, .download-folder-tree.scrollbar-active::-webkit-scrollbar-thumb {
   background: #35353a;
 }
 .album-strip::-webkit-scrollbar-thumb:hover,
-.tab-panel::-webkit-scrollbar-thumb:hover, .upload-list::-webkit-scrollbar-thumb:hover {
+.tab-panel::-webkit-scrollbar-thumb:hover, .upload-list::-webkit-scrollbar-thumb:hover,
+#recommendationsPane::-webkit-scrollbar-thumb:hover, .download-folder-tree::-webkit-scrollbar-thumb:hover {
   background: #454549;
 }
 

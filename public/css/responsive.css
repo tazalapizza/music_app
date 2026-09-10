@@ -105,35 +105,42 @@
      mobile browsers doesn't fade at all). Thin here where filelist.css's
      own .scrollbar-active rule is thicker, to stay proportionate at
      mobile's touch scale; same neutral gray thumb color otherwise. */
-  .file-list, .tab-panel, .album-strip, .upload-list, .player-blur-group {
+  .file-list, .tab-panel, .album-strip, .upload-list, .player-blur-group,
+  #recommendationsPane, .download-folder-tree {
     scrollbar-width: none;
     scrollbar-color: transparent transparent;
   }
   .file-list::-webkit-scrollbar, .tab-panel::-webkit-scrollbar,
   .album-strip::-webkit-scrollbar, .upload-list::-webkit-scrollbar,
-  .player-blur-group::-webkit-scrollbar {
+  .player-blur-group::-webkit-scrollbar,
+  #recommendationsPane::-webkit-scrollbar, .download-folder-tree::-webkit-scrollbar {
     display: block; width: 3px; height: 3px;
   }
   .file-list::-webkit-scrollbar-track, .tab-panel::-webkit-scrollbar-track,
   .album-strip::-webkit-scrollbar-track, .upload-list::-webkit-scrollbar-track,
-  .player-blur-group::-webkit-scrollbar-track {
+  .player-blur-group::-webkit-scrollbar-track,
+  #recommendationsPane::-webkit-scrollbar-track, .download-folder-tree::-webkit-scrollbar-track {
     background: transparent;
   }
   .file-list::-webkit-scrollbar-thumb, .tab-panel::-webkit-scrollbar-thumb,
   .album-strip::-webkit-scrollbar-thumb, .upload-list::-webkit-scrollbar-thumb,
-  .player-blur-group::-webkit-scrollbar-thumb {
+  .player-blur-group::-webkit-scrollbar-thumb,
+  #recommendationsPane::-webkit-scrollbar-thumb, .download-folder-tree::-webkit-scrollbar-thumb {
     background: transparent; border-radius: 3px;
   }
   .file-list.scrollbar-active, .tab-panel.scrollbar-active,
   .album-strip.scrollbar-active, .upload-list.scrollbar-active,
-  .player-blur-group.scrollbar-active {
+  .player-blur-group.scrollbar-active,
+  #recommendationsPane.scrollbar-active, .download-folder-tree.scrollbar-active {
     scrollbar-color: #35353a transparent;
   }
   .file-list.scrollbar-active::-webkit-scrollbar-thumb,
   .tab-panel.scrollbar-active::-webkit-scrollbar-thumb,
   .album-strip.scrollbar-active::-webkit-scrollbar-thumb,
   .upload-list.scrollbar-active::-webkit-scrollbar-thumb,
-  .player-blur-group.scrollbar-active::-webkit-scrollbar-thumb {
+  .player-blur-group.scrollbar-active::-webkit-scrollbar-thumb,
+  #recommendationsPane.scrollbar-active::-webkit-scrollbar-thumb,
+  .download-folder-tree.scrollbar-active::-webkit-scrollbar-thumb {
     background: #35353a;
   }
 

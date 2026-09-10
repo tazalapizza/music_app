@@ -760,10 +760,11 @@ function formatSize(bytes) {
   // directly right after inserting a new strip.
   window.setupHoverScrollbarFor = attach;
 
-  // .file-list is present at load; the other three (queue/playlist tab
-  // panels, the upload list) are also static elements already in
+  // .file-list is present at load; the other elements (queue/playlist tab
+  // panels, the upload list, the recommendations pane, the upload manager's
+  // destination-folder tree) are also static elements already in
   // index.html, never recreated — only .album-strip varies, handled above.
-  document.querySelectorAll('.file-list, .upload-list').forEach(attach);
+  document.querySelectorAll('.file-list, .upload-list, #recommendationsPane, .download-folder-tree').forEach(attach);
   document.querySelectorAll('.tab-panel').forEach(attach);
   // .player-blur-group is mobile-only (the full-player scroll container —
   // see responsive.css); also static and present at load, so it's safe to

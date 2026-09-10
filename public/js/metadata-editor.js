@@ -649,7 +649,9 @@ metaArtKeepBtn.addEventListener('click', () => {
 });
 
 metaCancelBtn.addEventListener('click', closeMetaEditor);
-metaOverlay.addEventListener('click', (e) => { if (e.target === metaOverlay) closeMetaEditor(); });
+metaOverlay.addEventListener('click', (e) => {
+  if (e.target === metaOverlay && !document.body.classList.contains('meta-editor-pending')) closeMetaEditor();
+});
 
 async function applyMetaEdits() {
   const state = metaEditState;

@@ -6,12 +6,14 @@
 const panelTabLyrics = document.getElementById('panelTabLyrics');
 const panelTabVisualizer = document.getElementById('panelTabVisualizer');
 const panelTabMixer = document.getElementById('panelTabMixer');
-const panelTabBtns = { lyrics: panelTabLyrics, visualizer: panelTabVisualizer, mixer: panelTabMixer };
+const panelTabRecommendations = document.getElementById('panelTabRecommendations');
+const panelTabBtns = { lyrics: panelTabLyrics, visualizer: panelTabVisualizer, mixer: panelTabMixer, recommendations: panelTabRecommendations };
 
 const visualizerPane = document.getElementById('visualizerPane');
 const mixerPane = document.getElementById('mixerPane');
 const lyricsPane = document.getElementById('lyricsPane');
-const panelPanes = { lyrics: lyricsPane, visualizer: visualizerPane, mixer: mixerPane };
+const recommendationsPane = document.getElementById('recommendationsPane');
+const panelPanes = { lyrics: lyricsPane, visualizer: visualizerPane, mixer: mixerPane, recommendations: recommendationsPane };
 
 let activePanelTab = 'lyrics';
 
@@ -29,6 +31,7 @@ function switchPanelTab(tab) {
 panelTabLyrics.addEventListener('click', () => switchPanelTab('lyrics'));
 panelTabVisualizer.addEventListener('click', () => switchPanelTab('visualizer'));
 panelTabMixer.addEventListener('click', () => switchPanelTab('mixer'));
+panelTabRecommendations.addEventListener('click', () => switchPanelTab('recommendations'));
 
 // ---------- Visualizer ----------
 const visualizerCanvas = document.getElementById('visualizerCanvas');

@@ -14,6 +14,7 @@ const rememberVolumeInput = document.getElementById('rememberVolumeInput');
 const hideNonMusicInput = document.getElementById('hideNonMusicInput');
 const replayGainInput = document.getElementById('replayGainInput');
 const maxItemsLoadInput = document.getElementById('maxItemsLoadInput');
+const openUploadManagerOnRecInput = document.getElementById('openUploadManagerOnRecInput');
 
 function openSettings() {
   seekBackInput.value = settings.seekBack;
@@ -23,6 +24,7 @@ function openSettings() {
   hideNonMusicInput.checked = settings.hideNonMusic;
   replayGainInput.checked = settings.replayGainEnabled;
   maxItemsLoadInput.value = settings.maxItemsLoad;
+  openUploadManagerOnRecInput.checked = settings.openUploadManagerOnRecommendationClick;
   updateOfflineDownloadsSizeDisplay();
   settingsOverlay.classList.remove('hidden');
 }
@@ -42,6 +44,7 @@ function closeSettings() {
   const hideNonMusicChanged = settings.hideNonMusic !== hideNonMusicInput.checked;
   settings.hideNonMusic = hideNonMusicInput.checked;
   settings.replayGainEnabled = replayGainInput.checked;
+  settings.openUploadManagerOnRecommendationClick = openUploadManagerOnRecInput.checked;
   const maxItemsLoadRaw = parseInt(maxItemsLoadInput.value, 10);
   const newMaxItemsLoad = isFinite(maxItemsLoadRaw) && maxItemsLoadRaw >= 0 ? Math.min(maxItemsLoadRaw, 100) : DEFAULT_SETTINGS.maxItemsLoad;
   const maxItemsLoadChanged = settings.maxItemsLoad !== newMaxItemsLoad;

@@ -1,0 +1,85 @@
+services:
+  music_app:
+    build: .
+    container_name: music_app
+    restart: unless-stopped
+    # Port 3838 is no longer published to the host directly - nginx (below)
+    # is now the only public entry point, terminating TLS and proxying to
+    # this container over the internal Docker network instead. Kept as
+    # "expose" (internal-only, visible to other containers on this compose
+    # network) rather than removed entirely, in case direct HTTP access is
+    # ever needed again for debugging.
+    expose:
+      - "3838"
+    env_file:
+      - .env
+    environment:
+      MUSIC_ROOT: /music
+      DATA_DIR: /data
+    volumes:
+      - /home/ubuntu/navidrome/music_merged:/music
+      - ./data:/data
+      - ./server.js:/app/server.js
+      - ./public:/app/public
+
+  # -----------------------------------------------------------------------
+  # nginx: TLS-terminating reverse proxy in front of music_app.
+  #
+  # REPLACES the earlier loclx/LocalXpose tunnel approach entirely - that
+  # was a free-tier third-party tunnel with a confirmed ~15-minute session
+  # expiry ("tunnel get expired" error hit during real testing) and a
+  # random subdomain that changed on every restart, making it unworkable
+  # for anything beyond short manual testing bursts. This setup gives a
+  # real, permanent, auto-renewing HTTPS certificate on a stable hostname,
+  # with no third-party service in the traffic path at all - just this VPS,
+  # Dynu (free dynamic DNS, used here as a free static-hostname
+  # registrar since this VPS's IP doesn't change), and Let's Encrypt.
+  #
+  # nginx serves the ACME HTTP-01 challenge on port 80 (required for
+  # Certbot to prove domain ownership) and proxies everything else on 443
+  # to music_app over the internal Docker network.
+  #
+  # Mounts ./nginx/active.conf rather than app.conf directly - this is a
+  # FIX for a real chicken-and-egg problem hit during initial setup: nginx
+  # refused to start AT ALL when its config referenced a certificate file
+  # that didn't exist yet (confirmed via a genuine "cannot load
+  # certificate ... No such file or directory" crash loop), which meant it
+  # could never serve the port-80 ACME challenge Certbot needed to obtain
+  # that very certificate. The Makefile's https-init target now copies
+  # nginx/app-bootstrap.conf (port 80 only, no SSL block) to
+  # nginx/active.conf first, requests the cert against that, THEN copies
+  # the real nginx/app.conf (both ports) over active.conf and restarts
+  # nginx once more - by which point the certificate genuinely exists. See
+  # nginx/app-bootstrap.conf and nginx/app.conf for the two configs
+  # themselves, and the Makefile's https-init target for the swap logic.
+  # active.conf itself is generated/overwritten by that target and does
+  # not need to be created or edited manually.
+  nginx:
+    image: nginx:alpine
+    container_name: music_app_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/active.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./certbot/conf:/etc/letsencrypt:ro
+      - ./certbot/www:/var/www/certbot:ro
+    depends_on:
+      - music_app
+
+  # -----------------------------------------------------------------------
+  # certbot: obtains and renews the Let's Encrypt certificate.
+  #
+  # Does NOT run continuously - see the Makefile's 'https-init' and
+  # 'https-renew' targets, which run this as a one-off (`docker compose run
+  # --rm certbot ...`) rather than a long-lived service. Defined here so
+  # those Makefile targets have a consistent image/volume setup to run
+  # against, without repeating the volume mounts in multiple places.
+  # -----------------------------------------------------------------------
+  certbot:
+    image: certbot/certbot
+    container_name: music_app_certbot
+    volumes:
+      - ./certbot/conf:/etc/letsencrypt
+      - ./certbot/www:/var/www/certbot
