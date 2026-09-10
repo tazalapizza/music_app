@@ -242,6 +242,20 @@ const lyricsLinesEl = document.getElementById('lyricsLines');
 const lyricsScrollModeBtn = document.getElementById('lyricsScrollModeBtn');
 const lyricsEditBtn = document.getElementById('lyricsEditBtn');
 const lyricsFetchEmptyBtn = document.getElementById('lyricsFetchEmptyBtn');
+const japaneseCharacterRe = /[\u3040-\u30ff]|\p{Script=Han}/u;
+let lyricsRomajiConverter;
+let lyricsRomajiConverterPromise;
+let lyricsRenderVersion = 0;
+
+function getLyricsRomajiConverter() {
+  if (!lyricsRomajiConverterPromise) {
+    lyricsRomajiConverter = new (Kuroshiro.default || Kuroshiro)();
+    lyricsRomajiConverterPromise = lyricsRomajiConverter.init(
+      new KuromojiAnalyzer({ dictPath: '/kuromoji-dict/' })
+    ).then(() => lyricsRomajiConverter);
+  }
+  return lyricsRomajiConverterPromise;
+}
 
 // Parses LRC-style "[mm:ss.xx] text" lines. Lines without a timestamp are kept
 // (time: null) so plain/unsynced lyrics still render, just without a highlight.
@@ -294,14 +308,33 @@ function interpolateLyricsTimes(lines, duration) {
 }
 
 function renderLyricsContent() {
-  lyricsLinesEl.innerHTML = '';
+  const renderVersion = ++lyricsRenderVersion;
+  lyricsLinesEl.innerHTML = "";
   const hasLyrics = currentLyrics && currentLyrics.lines.length > 0;
-  lyricsEmptyEl.classList.toggle('hidden', hasLyrics);
+  lyricsEmptyEl.classList.toggle("hidden", hasLyrics);
+  const hasJapanese = hasLyrics && currentLyrics.lines.some(line => japaneseCharacterRe.test(line.text));
+  lyricsLinesEl.classList.toggle("has-japanese", hasJapanese);
   if (!hasLyrics) return;
   currentLyrics.lines.forEach(line => {
-    const div = document.createElement('div');
-    div.className = 'lyrics-line' + (currentLyrics.synced ? '' : ' unsynced');
-    div.textContent = line.text;
+    const div = document.createElement("div");
+    div.className = "lyrics-line" + (currentLyrics.synced ? "" : " unsynced");
+    if (hasJapanese) {
+      const original = document.createElement("span");
+      original.className = "lyrics-original";
+      original.textContent = line.text;
+      const romaji = document.createElement("span");
+      romaji.className = "lyrics-romaji";
+      romaji.textContent = japaneseCharacterRe.test(line.text) ? "Converting…" : line.text;
+      div.append(original, romaji);
+      if (japaneseCharacterRe.test(line.text)) {
+        getLyricsRomajiConverter()
+          .then(converter => converter.convert(line.text, { to: "romaji", mode: "spaced", romajiSystem: "hepburn" }))
+          .then(text => { if (renderVersion === lyricsRenderVersion) romaji.textContent = text; })
+          .catch(() => { if (renderVersion === lyricsRenderVersion) romaji.textContent = line.text; });
+      }
+    } else {
+      div.textContent = line.text;
+    }
     lyricsLinesEl.appendChild(div);
   });
 }

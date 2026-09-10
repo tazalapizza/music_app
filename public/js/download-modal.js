@@ -15,6 +15,7 @@ const downloadFolderPath = document.getElementById('downloadFolderPath');
 const downloadFolderTree = document.getElementById('downloadFolderTree');
 const downloadProgressRow = document.getElementById('downloadProgressRow');
 const downloadProgressFill = document.getElementById('downloadProgressFill');
+const downloadProgressDetails = document.getElementById('downloadProgressDetails');
 const downloadStatus = document.getElementById('downloadStatus');
 const downloadCancelBtn = document.getElementById('downloadCancelBtn');
 const downloadApplyBtn = document.getElementById('downloadApplyBtn');
@@ -41,6 +42,7 @@ function setDownloadStatus(msg, isError) {
 function setDownloadProgress(pct) {
   downloadProgressRow.classList.toggle('hidden', pct == null);
   downloadProgressFill.style.width = (pct || 0) + '%';
+  if (pct == null) downloadProgressDetails.textContent = '';
 }
 
 async function renderDownloadFolderTree(relPath) {
@@ -152,10 +154,24 @@ downloadCancelBtn.addEventListener('click', closeDownloadModal);
 function uploadDownloadFile(file, destFolder) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
+    let uploadDownloadLastLoaded = 0;
+    let uploadDownloadLastTime = performance.now();
+    let uploadDownloadSmoothedSpeed = 0;
     xhr.open('POST', '/api/upload');
     xhr.upload.addEventListener('progress', (e) => {
+      const now = performance.now();
+      const dt = (now - uploadDownloadLastTime) / 1000;
+      if (dt > 0.15) {
+        const instSpeed = (e.loaded - uploadDownloadLastLoaded) / dt;
+        uploadDownloadSmoothedSpeed = uploadDownloadSmoothedSpeed === 0 ? instSpeed : (uploadDownloadSmoothedSpeed * 0.7 + instSpeed * 0.3);
+        uploadDownloadLastLoaded = e.loaded;
+        uploadDownloadLastTime = now;
+      }
       if (!e.lengthComputable) return;
       setDownloadProgress(Math.round((e.loaded / e.total) * 100));
+      const pct = Math.round((e.loaded / e.total) * 100);
+      const eta = uploadDownloadSmoothedSpeed > 0 ? (e.total - e.loaded) / uploadDownloadSmoothedSpeed : null;
+      downloadProgressDetails.textContent = [`${pct}%`, formatUploadSpeed(uploadDownloadSmoothedSpeed), eta != null ? `${formatDuration(eta)} left` : ''].filter(Boolean).join(' · ');
     });
     xhr.onload = () => {
       const data = JSON.parse(xhr.responseText || '{}');
@@ -219,5 +235,4 @@ function onMetaEditorClosedDuringCombo() {
   // locked and blank again rather than closing alongside it.
   enterMetaEditorPendingState();
 }
-document.getElementById('metaCancelBtn').addEventListener('click', onMetaEditorClosedDuringCombo);
-document.getElementById('metaApplyBtn').addEventListener('click', onMetaEditorClosedDuringCombo);
+document.addEventListener('metadata-editor-closed', onMetaEditorClosedDuringCombo);

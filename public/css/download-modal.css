@@ -16,6 +16,7 @@
   background: #1e1e21;
   color: #e8e8ea;
 }
+.download-progress-details { font-size: 11px; color: #a8a8ae; text-align: center; min-height: 14px; }
 #downloadFileBtn {
   background: #2a2a2e;
   border: none;

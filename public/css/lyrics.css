@@ -169,6 +169,20 @@
   color: #c8c8ce;
   transition: color 0.2s ease;
 }
+.lyrics-lines.has-japanese .lyrics-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 20px;
+  text-align: center;
+}
+.lyrics-original,
+.lyrics-romaji {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.lyrics-romaji { color: #aaaab2; }
+.lyrics-line.active .lyrics-romaji { color: inherit; }
+
 .lyrics-line.active {
   color: #e8e8ea;
   font-weight: 600;
@@ -311,7 +325,7 @@
   border: none;
   color: #d8d8dc;
   font-size: 12px;
-  text-align: left;
+  text-align: center;
   padding: 7px 10px;
   border-radius: 6px;
   cursor: pointer;

@@ -34,7 +34,7 @@ function refreshUploadEmptyState() {
   uploadEmpty.classList.toggle('hidden', hasItems);
 }
 
-function formatSpeed(bytesPerSec) {
+function formatUploadSpeed(bytesPerSec) {
   if (!bytesPerSec || bytesPerSec <= 0) return '';
   if (bytesPerSec < 1024) return bytesPerSec.toFixed(0) + ' B/s';
   if (bytesPerSec < 1024 * 1024) return (bytesPerSec / 1024).toFixed(0) + ' KB/s';
@@ -93,7 +93,7 @@ function updateUploadProgress(id, pct, speedBytesPerSec, etaSeconds) {
   const it = uploadItemsMap[id];
   if (!it) return;
   it.fill.style.width = pct + '%';
-  const speedText = formatSpeed(speedBytesPerSec);
+  const speedText = formatUploadSpeed(speedBytesPerSec);
   const etaText = (etaSeconds != null && isFinite(etaSeconds)) ? formatDuration(etaSeconds) + ' left' : '';
   it.status.textContent = [`${pct}%`, speedText, etaText].filter(Boolean).join(' · ');
 }

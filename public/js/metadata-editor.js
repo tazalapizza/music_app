@@ -150,6 +150,7 @@ function closeMetaEditor() {
   metaOverlay.classList.add('hidden');
   metaEditState = null;
   closeMetaFieldDropdown();
+  document.dispatchEvent(new CustomEvent("metadata-editor-closed"));
 }
 
 function renderMetaEditor() {
@@ -576,6 +577,8 @@ metaFetchMetaBtn.addEventListener('click', async () => {
         const r = data.results[Number(el.dataset.i)];
         if (r.title) { f.vals.title = r.title; document.getElementById('metaField-title').value = r.title; }
         if (r.artist) { f.vals.artist = r.artist; document.getElementById('metaField-artist').value = r.artist; }
+        const albumArtist = r.albumartist || r.artist;
+        if (albumArtist) { f.vals.albumartist = albumArtist; document.getElementById('metaField-albumartist').value = albumArtist; }
         if (r.album) { f.vals.album = r.album; document.getElementById('metaField-album').value = r.album; }
         if (r.year) { f.vals.year = r.year; document.getElementById('metaField-year').value = r.year; }
         if (r.track) { f.vals.track = String(r.track); document.getElementById('metaField-track').value = String(r.track); }
