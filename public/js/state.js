@@ -92,7 +92,7 @@ const DEFAULT_SETTINGS = {
   seekForward: 10,
   skipDeleteConfirm: false,
   rememberVolume: false,
-  hideNonMusic: false,
+  hideNonMusic: true,
   mobileFileRowView: 'name', // 'name' | 'meta' — mobile file list row display (see filelist.js/topbar toggle)
   replayGainEnabled: true,
   maxItemsLoad: 20, // rows loaded per chunk in file lists/queue/playlists; 0 = unlimited (load everything at once)

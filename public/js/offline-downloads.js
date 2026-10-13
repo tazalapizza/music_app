@@ -421,19 +421,59 @@ async function downloadFolderForOffline(item) {
 }
 
 async function removeFolderOfflineDownload(item) {
-  try {
-    const { files } = await api(`/api/expand?path=${encodeURIComponent(item.path)}`);
-    for (const f of files) {
-      if (isOfflineDownloaded(f)) await removeOfflineDownload({ path: f, name: fileNameOf(f) }, { silent: true });
-    }
-  } catch (err) {
-    console.error('[offline] failed to expand folder for removal:', item.path, err);
-  }
-  offlineFolderPaths.delete(item.path);
-  const db = await openOfflineDB();
-  await tx1(db, OFFLINE_FOLDER_STORE, 'readwrite', (store) => store.delete(item.path));
-  updateOfflineIndicatorsFor(item.path);
+  await removeOfflineDownloadsUnder(item.path);
   showToast(`Removed "${item.name}" from offline downloads`);
+}
+
+// Drops every stored track/folder marker at or under `path`, going by what's
+// actually stored locally rather than asking the server what the folder
+// contains - so it works offline, and also catches tracks the server no
+// longer lists there. Also called after a file/folder is deleted on the
+// server (filemanagement.js, controls.js, queue-playlists.js) so its offline
+// copy doesn't linger unreachable.
+async function removeOfflineDownloadsUnder(path) {
+  for (const p of [...offlineBlobUrls.keys()]) {
+    if (pathIsInsideFolder(p, path)) await removeOfflineDownload({ path: p, name: fileNameOf(p) }, { silent: true });
+  }
+  const folders = [...offlineFolderPaths].filter((f) => pathIsInsideFolder(f, path));
+  if (!folders.length) return;
+  folders.forEach((f) => offlineFolderPaths.delete(f));
+  const db = await openOfflineDB();
+  await tx1(db, OFFLINE_FOLDER_STORE, 'readwrite', (store) => folders.forEach((f) => store.delete(f)));
+  folders.forEach(updateOfflineIndicatorsFor);
+}
+
+// Re-keys every stored track/folder marker at or under oldPath to newPath,
+// after a rename/move on the server (filemanagement.js), so the offline copy
+// follows the file instead of staying stored under a path nothing lists.
+async function moveOfflineDownloads(oldPath, newPath) {
+  const tracks = [...offlineBlobUrls.keys()].filter((p) => pathIsInsideFolder(p, oldPath));
+  const folders = [...offlineFolderPaths].filter((f) => pathIsInsideFolder(f, oldPath));
+  if (!tracks.length && !folders.length) return;
+  const rebase = (p) => newPath + p.slice(oldPath.length);
+  const db = await openOfflineDB();
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction([OFFLINE_STORE, OFFLINE_FOLDER_STORE], 'readwrite');
+    const trackStore = tx.objectStore(OFFLINE_STORE);
+    for (const p of tracks) {
+      const req = trackStore.get(p);
+      req.onsuccess = () => {
+        if (!req.result) return;
+        trackStore.delete(p);
+        trackStore.put({ ...req.result, path: rebase(p), name: fileNameOf(rebase(p)) });
+      };
+    }
+    const folderStore = tx.objectStore(OFFLINE_FOLDER_STORE);
+    for (const f of folders) { folderStore.delete(f); folderStore.put({ path: rebase(f) }); }
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+  });
+  for (const p of tracks) {
+    const entry = offlineBlobUrls.get(p);
+    offlineBlobUrls.delete(p);
+    offlineBlobUrls.set(rebase(p), entry);
+  }
+  for (const f of folders) { offlineFolderPaths.delete(f); offlineFolderPaths.add(rebase(f)); }
 }
 
 // Settings panel "Delete all downloads" - wipes every stored track/folder

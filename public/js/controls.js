@@ -226,6 +226,7 @@ document.getElementById('deleteTrackBtn').addEventListener('click', async () => 
     body: JSON.stringify({ path: track.path }),
     retryOnAuth: false
   });
+  await removeOfflineDownloadsUnder(track.path);
   const removedRow = [...queuePanel.querySelectorAll('.queue-item')].find(row => Number(row.dataset.index) === queueIndex);
   removeFromQueueAt(queueIndex);
   if (queueIndex >= queue.length) queueIndex = queue.length - 1;

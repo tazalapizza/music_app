@@ -206,7 +206,15 @@
         <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15V6"></path><path d="M18.5 18a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z"></path><path d="M12 12H3"></path><path d="M16 6H3"></path><path d="M12 18H3"></path></svg>
         <span>Playlists</span>
       </button>
+      <button class="bottom-nav-btn" data-mobile-tab="blindtest" title="Blind test">
+        <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+        <span>Blind test</span>
+      </button>
     </nav>
+
+    <!-- Mobile home of the blind test: blindtest.js moves the same views
+         here from the desktop panel's #blindTestPane below 780px. -->
+    <section class="mobile-blindtest-panel" id="mobileBlindTestPanel"></section>
 
     <div class="player-blur-group">
       <div class="player-blur-clip">
@@ -233,6 +241,9 @@
               </button>
               <button id="panelTabRecommendations" class="panel-tab-btn" title="Recommendations">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><polygon points="12 7 13.5 10.5 17 12 13.5 13.5 12 17 10.5 13.5 7 12 10.5 10.5 12 7"></polygon></svg>
+              </button>
+              <button id="panelTabBlindTest" class="panel-tab-btn" title="Blind test">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
               </button>
             </div>
             <div class="panel-content">
@@ -323,6 +334,54 @@
             <div id="recommendationsPane" class="panel-pane hidden">
               <div id="recommendationsEmpty" class="lyrics-empty">No recommendations found</div>
               <div id="recommendationsList" class="recommendations-list"></div>
+            </div>
+            <div id="blindTestPane" class="panel-pane hidden">
+              <div id="btSetup" class="bt-view">
+                <div class="bt-title">Blind test</div>
+                <div id="btQueueInfo" class="bt-subtitle"></div>
+                <div class="bt-options">
+                  <label class="bt-option-label" for="btClipInput">Reveal after</label>
+                  <span class="bt-number"><input id="btClipInput" type="text" inputmode="numeric" maxlength="2" data-default="10" value="10"><span>s</span></span>
+                  <label class="bt-option-label" for="btRevealInput">Reveal for</label>
+                  <span class="bt-number"><input id="btRevealInput" type="text" inputmode="numeric" maxlength="2" data-default="5" value="5"><span>s</span></span>
+                  <label class="bt-option-label" for="btGapInput">Pause between</label>
+                  <span class="bt-number"><input id="btGapInput" type="text" inputmode="numeric" maxlength="2" data-default="1" value="1"><span>s</span></span>
+                  <span class="bt-option-label">Start point</span>
+                  <div id="btStartGroup" class="bt-segmented">
+                    <button data-value="start">From the start</button>
+                    <button data-value="random" class="on">Random</button>
+                  </div>
+                </div>
+                <button id="btStartBtn" class="bt-primary-btn">Start</button>
+              </div>
+              <div id="btGame" class="bt-view hidden">
+                <div class="bt-game-header">
+                  <span id="btCounter" class="bt-subtitle"></span>
+                  <button id="btStopBtn" class="bt-text-btn" title="Stop blind test">Stop</button>
+                </div>
+                <div class="bt-stage">
+                  <div id="btArtWrap" class="bt-art-wrap">
+                    <span id="btMystery" class="bt-mystery">?</span>
+                    <img id="btArt" class="bt-art hidden" alt="">
+                  </div>
+                  <div class="bt-answer">
+                    <div id="btAnswerTitle" class="bt-answer-title"></div>
+                    <div id="btAnswerArtist" class="bt-answer-artist"></div>
+                  </div>
+                </div>
+                <div class="bt-progress"><div id="btProgressFill" class="bt-progress-fill"></div></div>
+                <div id="btCountdown" class="bt-countdown"></div>
+                <div class="bt-controls">
+                  <button id="btPauseBtn" class="bt-text-btn">Pause</button>
+                  <button id="btRevealBtn" class="bt-text-btn">Reveal</button>
+                  <button id="btNextBtn" class="bt-text-btn">Next</button>
+                </div>
+              </div>
+              <div id="btFinished" class="bt-view hidden">
+                <div class="bt-title">That's the whole queue!</div>
+                <div id="btFinishedInfo" class="bt-subtitle"></div>
+                <button id="btAgainBtn" class="bt-primary-btn">New blind test</button>
+              </div>
             </div>
             </div>
           </div>
@@ -723,6 +782,7 @@
 
   <div id="toast" class="toast"></div>
 
+<div id="blindTestOverlay" class="blindtest-overlay"></div>
 <script src="js/vendor-signalsmith-stretch.js"></script>
 <script src="js/vendor/kuroshiro.min.js"></script>
 <script src="js/vendor/kuroshiro-analyzer-kuromoji.min.js"></script>
@@ -741,6 +801,7 @@
     <script src="js/settings-auth-toast-lyrics.js"></script>
     <script src="js/panel-tabs.js"></script>
     <script src="js/recommendations.js"></script>
+    <script src="js/blindtest.js"></script>
     <script src="js/metadata-editor.js"></script>
     <script src="js/download-modal.js"></script>
     <script src="js/layout-init.js"></script>

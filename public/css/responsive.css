@@ -37,7 +37,8 @@
 .row-actions-cell,
 .file-name-wrap-meta,
 .playlist-menu-btn,
-.offline-downloads-mobile-only {
+.offline-downloads-mobile-only,
+.mobile-blindtest-panel {
   display: none;
 }
 /* Belt-and-suspenders: this button also carries .btn-icon-mobile (already
@@ -247,6 +248,48 @@
   .app.has-player .sidebar {
     padding-bottom: calc(var(--bottom-nav-h) + var(--player-collapsed-h, 58px) + var(--safe-bottom, 0px));
   }
+
+  /* ----- Blind test tab (views moved in from the desktop panel by blindtest.js) ----- */
+  .app.mobile-tab-blindtest .mobile-blindtest-panel {
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    background: #17171a;
+    overflow-y: auto;
+    padding-top: var(--safe-top, 0px);
+    padding-bottom: calc(var(--bottom-nav-h) + var(--safe-bottom, 0px));
+  }
+  .app.has-player .mobile-blindtest-panel {
+    padding-bottom: calc(var(--bottom-nav-h) + var(--player-collapsed-h, 58px) + var(--safe-bottom, 0px));
+  }
+  /* While running, the panel goes full screen above lyrics.css's black
+     overlay (covering the bottom nav too); the player is hidden entirely. */
+  body.blindtest-active .app .mobile-blindtest-panel {
+    z-index: 91;
+    padding-bottom: var(--safe-bottom, 0px);
+  }
+  body.blindtest-active .player-blur-group { display: none; }
+
+  .mobile-blindtest-panel .bt-view { gap: 14px; padding: 16px 12px 20px; }
+  .mobile-blindtest-panel .bt-title { font-size: 28px; }
+  .mobile-blindtest-panel .bt-subtitle { font-size: 17px; }
+  .mobile-blindtest-panel .bt-options { gap: 12px 14px; }
+  .mobile-blindtest-panel .bt-option-label { font-size: 16px; }
+  .mobile-blindtest-panel .bt-number { gap: 8px; font-size: 16px; }
+  .mobile-blindtest-panel .bt-number input { width: 56px; height: 56px; font-size: 22px; border-radius: 10px; }
+  .mobile-blindtest-panel .bt-stepper button { width: 32px; height: 26px; }
+  .mobile-blindtest-panel .bt-segmented button { font-size: 15px; padding: 10px; white-space: nowrap; }
+  .mobile-blindtest-panel .bt-primary-btn { font-size: 20px; padding: 14px 48px; }
+  .mobile-blindtest-panel .bt-text-btn { font-size: 17px; padding: 10px 20px; }
+  .mobile-blindtest-panel #btGame { gap: 16px; }
+  .mobile-blindtest-panel .bt-art-wrap { width: min(60vw, 240px); height: min(60vw, 240px); }
+  .mobile-blindtest-panel .bt-mystery { font-size: 112px; }
+  .mobile-blindtest-panel .bt-answer { min-height: 76px; }
+  .mobile-blindtest-panel .bt-answer-title { font-size: 26px; }
+  .mobile-blindtest-panel .bt-answer-artist { font-size: 21px; }
+  .mobile-blindtest-panel .bt-countdown { font-size: 20px; min-height: 24px; }
 
   /* ----- Top bar ----- */
 

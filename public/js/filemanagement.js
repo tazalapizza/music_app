@@ -134,6 +134,7 @@ async function renameItem(item) {
         method: 'POST', headers: {'Content-Type':'application/json'},
         body: JSON.stringify({ path: item.path, newName })
       });
+      await moveOfflineDownloads(item.path, dirNameOf(item.path) ? `${dirNameOf(item.path)}/${newName}` : newName);
       browse(currentPath, { keepSort: true });
     }
     return;
@@ -194,6 +195,7 @@ async function renameItem(item) {
           method: 'POST', headers: {'Content-Type':'application/json'},
           body: JSON.stringify({ path: item.path, newName })
         });
+        await moveOfflineDownloads(item.path, dirNameOf(item.path) ? `${dirNameOf(item.path)}/${newName}` : newName);
         browse(currentPath, { keepSort: true });
       } else {
         input.closest('form').replaceWith(nameEl);
@@ -247,6 +249,7 @@ async function pasteMoveHere() {
       body: JSON.stringify({ path: item.path, destFolder: currentPath }),
       retryOnAuth: false
     });
+    await moveOfflineDownloads(item.path, currentPath ? `${currentPath}/${fileNameOf(item.path)}` : fileNameOf(item.path));
   }
   browse(currentPath, { keepSort: true });
 }
@@ -261,6 +264,7 @@ async function deleteItem(item) {
       method: 'DELETE', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ path: item.path })
     });
+    await removeOfflineDownloadsUnder(item.path);
     browse(currentPath, { keepSort: true });
   }
 }

@@ -894,6 +894,7 @@ async function deleteItems(items) {
       body: JSON.stringify({ path: item.path }),
       retryOnAuth: false
     });
+    await removeOfflineDownloadsUnder(item.path);
   }
   clearSelection();
   browse(currentPath, { keepSort: true });

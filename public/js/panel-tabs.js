@@ -7,13 +7,15 @@ const panelTabLyrics = document.getElementById('panelTabLyrics');
 const panelTabVisualizer = document.getElementById('panelTabVisualizer');
 const panelTabMixer = document.getElementById('panelTabMixer');
 const panelTabRecommendations = document.getElementById('panelTabRecommendations');
-const panelTabBtns = { lyrics: panelTabLyrics, visualizer: panelTabVisualizer, mixer: panelTabMixer, recommendations: panelTabRecommendations };
+const panelTabBlindTest = document.getElementById('panelTabBlindTest');
+const panelTabBtns = { lyrics: panelTabLyrics, visualizer: panelTabVisualizer, mixer: panelTabMixer, recommendations: panelTabRecommendations, blindtest: panelTabBlindTest };
 
 const visualizerPane = document.getElementById('visualizerPane');
 const mixerPane = document.getElementById('mixerPane');
 const lyricsPane = document.getElementById('lyricsPane');
 const recommendationsPane = document.getElementById('recommendationsPane');
-const panelPanes = { lyrics: lyricsPane, visualizer: visualizerPane, mixer: mixerPane, recommendations: recommendationsPane };
+const blindTestPane = document.getElementById('blindTestPane');
+const panelPanes = { lyrics: lyricsPane, visualizer: visualizerPane, mixer: mixerPane, recommendations: recommendationsPane, blindtest: blindTestPane };
 
 let activePanelTab = 'lyrics';
 
@@ -32,6 +34,10 @@ panelTabLyrics.addEventListener('click', () => switchPanelTab('lyrics'));
 panelTabVisualizer.addEventListener('click', () => switchPanelTab('visualizer'));
 panelTabMixer.addEventListener('click', () => switchPanelTab('mixer'));
 panelTabRecommendations.addEventListener('click', () => switchPanelTab('recommendations'));
+panelTabBlindTest.addEventListener('click', () => {
+  switchPanelTab('blindtest');
+  renderBlindTestSetup();
+});
 
 // ---------- Visualizer ----------
 const visualizerCanvas = document.getElementById('visualizerCanvas');

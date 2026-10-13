@@ -33,6 +33,7 @@ const SHELL_ASSETS = [
   '/css/topbar.css',
   '/css/uploads.css',
   '/js/albums-carousel.js',
+  '/js/blindtest.js',
   '/js/browse.js',
   '/js/controls.js',
   '/js/filelist.js',
