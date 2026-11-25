@@ -760,15 +760,27 @@ async function writeReplayGainTags(full, gain, peak, lufs) {
   const peakStr = `${peak.toFixed(2)} dB`;
   const lufsStr = `${lufs.toFixed(2)} LUFS`;
   const tmp = path.join(path.dirname(full), `.rgtmp_${Date.now()}${ext}`);
-  const args = ['-y', '-loglevel', 'error', '-i', full, '-map', '0:a', '-c:a', 'copy'];
-  if (ext === '.mp3') args.push('-id3v2_version', '3');
-  args.push(
-    '-metadata', `REPLAYGAIN_TRACK_GAIN=${gainStr}`,
-    '-metadata', `REPLAYGAIN_TRACK_PEAK=${peakStr}`,
-    '-metadata', `REPLAYGAIN_TRACK_LOUDNESS=${lufsStr}`,
-    tmp
-  );
-  const { err } = await runFfmpeg(args);
+  // Embedded cover art is a video stream (attached_pic), so '-map 0:a' alone
+  // would silently strip it on every upload. Keep it ('0:v?' = optional), and
+  // fall back to audio-only if a corrupted art stream breaks the remux.
+  const buildArgs = (keepArt) => {
+    const args = ['-y', '-loglevel', 'error', '-i', full, '-map', '0:a'];
+    if (keepArt) args.push('-map', '0:v?', '-c:v', 'copy');
+    args.push('-c:a', 'copy');
+    if (ext === '.mp3') args.push('-id3v2_version', '3');
+    args.push(
+      '-metadata', `REPLAYGAIN_TRACK_GAIN=${gainStr}`,
+      '-metadata', `REPLAYGAIN_TRACK_PEAK=${peakStr}`,
+      '-metadata', `REPLAYGAIN_TRACK_LOUDNESS=${lufsStr}`,
+      tmp
+    );
+    return args;
+  };
+  let { err } = await runFfmpeg(buildArgs(true));
+  if (err) {
+    try { await fsp.unlink(tmp); } catch {}
+    ({ err } = await runFfmpeg(buildArgs(false)));
+  }
   if (!err) {
     await fsp.rename(tmp, full);
     await fixPerms(full);
