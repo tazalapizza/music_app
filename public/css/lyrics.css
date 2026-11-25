@@ -454,6 +454,13 @@
 }
 .bt-answer-title { font-size: 44px; font-weight: 600; color: #e8e8ea; }
 .bt-answer-artist { font-size: 38px; color: #a8a8ae; margin-top: 4px; }
+.bt-hint {
+  font-size: 32px;
+  color: var(--accent-color);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .revealing .bt-answer { animation: bt-fade-in 0.5s ease; }
 @keyframes bt-fade-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 .bt-progress {
@@ -473,13 +480,15 @@
 .revealing .bt-progress-fill { opacity: 0.4; }
 .bt-countdown { font-size: 30px; color: #c8c8ce; font-variant-numeric: tabular-nums; min-height: 36px; }
 .bt-controls {
-  align-self: stretch;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
   gap: 16px;
 }
-.bt-controls > :first-child { justify-self: end; }
-.bt-controls > :last-child { justify-self: start; }
+/* lyrics.css's .ios-toggle, scaled up to match the blind test menu. */
+.bt-toggle { justify-self: start; width: 76px; height: 44px; border-radius: 22px; }
+.bt-toggle .ios-toggle-thumb { top: 4px; left: 4px; width: 36px; height: 36px; }
+.bt-toggle.on .ios-toggle-thumb { left: 36px; }
 
 /* Active blind test: hide the player bar and black out/blur everything except the panel. */
 .blindtest-overlay {

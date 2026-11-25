@@ -649,7 +649,7 @@ function renderPlaylistTracks(name, tracks, tracksDiv) {
   // without it, a large playlist's rows would each fire their own
   // /api/meta request as they render.
   prefetchMeta(tracks);
-  renderPaginated(tracksDiv, tracks, (track, ti) => buildPlaylistRow(name, tracks, track, ti));
+  renderPaginated(tracksDiv, tracks, (track, ti) => buildPlaylistRow(name, tracks, track, ti), currentChunkSize(), playlistsPanel);
 }
 
 async function addAllToPlaylist(name, items) {

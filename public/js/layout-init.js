@@ -465,7 +465,7 @@ const appEl = document.querySelector('.app');
 const bottomNav = document.getElementById('bottomNav');
 
 function setMobileTab(tab) {
-  appEl.classList.remove('mobile-tab-files', 'mobile-tab-queue', 'mobile-tab-playlists', 'mobile-tab-blindtest');
+  appEl.classList.remove('mobile-tab-files', 'mobile-tab-queue', 'mobile-tab-playlists', 'mobile-tab-blindtest', 'mobile-tab-wishlist');
   appEl.classList.add('mobile-tab-' + tab);
   bottomNav.querySelectorAll('.bottom-nav-btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.mobileTab === tab);
@@ -477,6 +477,7 @@ function setMobileTab(tab) {
     if (sidebarTabBtn && !sidebarTabBtn.classList.contains('active')) sidebarTabBtn.click();
   }
   if (tab === 'blindtest') renderBlindTestSetup();
+  if (tab === 'wishlist') loadWishlist();
   // Whatever's inside this tab's panel may have been built/updated while it
   // was hidden (display:none on an ancestor, e.g. via the mobile-tab-*
   // class swap above, or the desktop sidebar tab equivalent this reuses) -

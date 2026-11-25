@@ -481,7 +481,11 @@ function currentChunkSize() {
 }
 const paginationObservers = new WeakMap(); // container -> active IntersectionObserver
 const paginationLoaders = new WeakMap(); // container -> function(targetIndex) that force-loads chunks up to and including targetIndex
-function renderPaginated(container, items, buildRow, chunkSize = currentChunkSize()) {
+// `scrollRoot` must be the element that actually scrolls: it defaults to
+// `container`, but a playlist's track list sits inside the scrolling
+// #playlistsPanel instead, and observing against a non-scrolling root means
+// the sentinel never leaves (or re-enters) view, so only the first chunks load.
+function renderPaginated(container, items, buildRow, chunkSize = currentChunkSize(), scrollRoot = container) {
   const prevObserver = paginationObservers.get(container);
   if (prevObserver) { prevObserver.disconnect(); paginationObservers.delete(container); }
   let nextIndex = 0;
@@ -523,7 +527,7 @@ function renderPaginated(container, items, buildRow, chunkSize = currentChunkSiz
   if (items.length > chunkSize) {
     observer = new IntersectionObserver((entries) => {
       if (entries[0].isIntersecting) appendChunk();
-    }, { root: container, rootMargin: '400px' });
+    }, { root: scrollRoot, rootMargin: '400px' });
     observer.observe(sentinel);
     paginationObservers.set(container, observer);
     appendChunk();

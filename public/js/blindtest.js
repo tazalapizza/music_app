@@ -22,6 +22,9 @@ const btCountdownEl = document.getElementById('btCountdown');
 const btPauseBtn = document.getElementById('btPauseBtn');
 const btRevealBtn = document.getElementById('btRevealBtn');
 const btNextBtn = document.getElementById('btNextBtn');
+const btKeepBtn = document.getElementById('btKeepBtn');
+const btHintEl = document.getElementById('btHint');
+const btHintToggle = document.getElementById('btHintToggle');
 
 const btMobileQuery = window.matchMedia('(max-width: 780px)');
 
@@ -86,6 +89,18 @@ document.querySelectorAll('#blindTestPane .bt-number input').forEach((input) => 
   }
   input.after(stepper);
 });
+btHintToggle.addEventListener('click', () => {
+  const on = !btHintToggle.classList.contains('on');
+  btHintToggle.classList.toggle('on', on);
+  btHintToggle.setAttribute('aria-checked', String(on));
+});
+
+// The song's top-level folder under the library root, or '' for songs at the root.
+function btCategory(track) {
+  const parts = track.path.split('/').filter(Boolean);
+  return parts.length > 1 ? parts[0] : '';
+}
+
 document.querySelectorAll('#blindTestPane .bt-segmented').forEach((group) => {
   group.addEventListener('click', (e) => {
     const btn = e.target.closest('button');
@@ -138,7 +153,7 @@ function btLoad(track, session) {
         if (isFinite(room) && room > 0) startAt = Math.random() * room;
       }
       btAudio.currentTime = startAt;
-      resolve({ track, elapsed: 0 });
+      resolve({ track, elapsed: 0, hold: false });
     };
     btAudio.onerror = () => resolve(null);
     btAudio.src = getOfflineStreamUrl(track.path) || `/api/stream?path=${encodeURIComponent(track.path)}`;
@@ -160,6 +175,7 @@ function btStart() {
     gapSec: btNumberInput('btGapInput'),
     accentBefore: document.documentElement.style.getPropertyValue('--accent-color'),
     random: btSegmentValue('btStartGroup') === 'random',
+    showHint: btHintToggle.classList.contains('on'),
     index: -1,
     cur: null,
     phase: 'loading', // 'loading' | 'guess' | 'reveal' | 'gap'
@@ -196,12 +212,7 @@ async function btPlay(i) {
   session.phase = 'guess';
   btAudio.onended = () => {
     if (bt !== session || session.cur !== clip) return;
-    if (session.phase === 'guess') {
-      btReveal();
-      setTimeout(() => { if (bt === session && session.cur === clip) btAdvance(); }, session.revealSec * 1000);
-    } else if (session.phase === 'reveal') {
-      btAdvance();
-    }
+    if (session.phase === 'guess') btReveal();
   };
   btAudio.play().catch(() => {});
   btFade(audioEl.volume, BT_FADE_MS);
@@ -256,6 +267,13 @@ async function btReveal() {
   }
 }
 
+// Holds off the automatic reveal; the song keeps playing until it ends or Reveal is pressed.
+function btKeepPlaying() {
+  if (!bt || bt.phase !== 'guess' || !bt.cur) return;
+  bt.cur.hold = true;
+  btRenderGame();
+}
+
 function btSetAccent(rgb) {
   document.documentElement.style.setProperty('--accent-color', rgb ? makeAccentColor(rgb) : '#e8e8ea');
 }
@@ -299,8 +317,11 @@ function btRenderGame() {
   btPauseBtn.textContent = bt.paused ? 'Resume' : 'Pause';
   btPauseBtn.disabled = bt.phase === 'loading' || bt.phase === 'gap';
   btRevealBtn.disabled = bt.phase !== 'guess';
+  btKeepBtn.disabled = bt.phase !== 'guess' || !bt.cur || bt.cur.hold;
   btNextBtn.disabled = bt.phase === 'loading';
   btGameEl.classList.toggle('revealing', bt.phase === 'reveal');
+  const guessing = bt.phase === 'guess' || bt.phase === 'loading';
+  btHintEl.textContent = guessing && bt.showHint ? btCategory(bt.tracks[bt.index]) : '';
   if (bt.phase !== 'reveal') {
     btArtWrapEl.classList.remove('revealed');
     btMysteryEl.textContent = '?';
@@ -327,9 +348,13 @@ function btTick() {
   }
   const clip = bt && bt.cur;
   if (!clip || bt.paused || bt.phase === 'loading') return;
-  if (!btAudio.paused && btAudio.readyState >= 3) clip.elapsed += dt;
+  // Once the song has ended, keep counting so the reveal still moves on to the next song.
+  if ((!btAudio.paused && btAudio.readyState >= 3) || btAudio.ended) clip.elapsed += dt;
   const elapsed = clip.elapsed;
-  if (bt.phase === 'guess') {
+  if (bt.phase === 'guess' && clip.hold) {
+    btProgressFillEl.style.width = '100%';
+    btCountdownEl.textContent = 'Playing on…';
+  } else if (bt.phase === 'guess') {
     const left = bt.clipSec - elapsed;
     btProgressFillEl.style.width = `${Math.min(100, (elapsed / bt.clipSec) * 100)}%`;
     btCountdownEl.textContent = `${Math.max(0, Math.ceil(left))}s`;
@@ -349,6 +374,7 @@ document.getElementById('btStopBtn').addEventListener('click', btStop);
 document.getElementById('btAgainBtn').addEventListener('click', renderBlindTestSetup);
 btPauseBtn.addEventListener('click', btTogglePause);
 btRevealBtn.addEventListener('click', btReveal);
+btKeepBtn.addEventListener('click', btKeepPlaying);
 btNextBtn.addEventListener('click', btAdvance);
 
 // Capture phase so Space/arrows don't reach the main player's shortcuts mid-game.

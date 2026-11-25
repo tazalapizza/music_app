@@ -741,7 +741,7 @@ document.addEventListener('keydown', (e) => {
   const tag = (e.target.tagName || '').toLowerCase();
   const isSeekBar = e.target.id === 'seekBar';
   if (!isSeekBar && (tag === 'input' || tag === 'textarea' || e.target.isContentEditable)) return;
-  const anyModalOpen = [settingsOverlay, metaOverlay, loginOverlay, modalOverlay].some(
+  const anyModalOpen = [settingsOverlay, metaOverlay, loginOverlay, modalOverlay, wishlistOverlay].some(
     el => el && !el.classList.contains('hidden')
   );
   if (anyModalOpen) return;

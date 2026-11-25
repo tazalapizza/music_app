@@ -38,7 +38,8 @@
 .file-name-wrap-meta,
 .playlist-menu-btn,
 .offline-downloads-mobile-only,
-.mobile-blindtest-panel {
+.mobile-blindtest-panel,
+.mobile-wishlist-panel {
   display: none;
 }
 /* Belt-and-suspenders: this button also carries .btn-icon-mobile (already
@@ -282,7 +283,12 @@
   .mobile-blindtest-panel .bt-stepper button { width: 32px; height: 26px; }
   .mobile-blindtest-panel .bt-segmented button { font-size: 15px; padding: 10px; white-space: nowrap; }
   .mobile-blindtest-panel .bt-primary-btn { font-size: 20px; padding: 14px 48px; }
-  .mobile-blindtest-panel .bt-text-btn { font-size: 17px; padding: 10px 20px; }
+  .mobile-blindtest-panel .bt-text-btn { font-size: 15px; padding: 10px 14px; }
+  .mobile-blindtest-panel .bt-controls { gap: 8px; }
+  .mobile-blindtest-panel .bt-toggle { width: 56px; height: 32px; border-radius: 16px; }
+  .mobile-blindtest-panel .bt-toggle .ios-toggle-thumb { top: 3px; left: 3px; width: 26px; height: 26px; }
+  .mobile-blindtest-panel .bt-toggle.on .ios-toggle-thumb { left: 27px; }
+  .mobile-blindtest-panel .bt-hint { font-size: 20px; }
   .mobile-blindtest-panel #btGame { gap: 16px; }
   .mobile-blindtest-panel .bt-art-wrap { width: min(60vw, 240px); height: min(60vw, 240px); }
   .mobile-blindtest-panel .bt-mystery { font-size: 112px; }
@@ -290,6 +296,30 @@
   .mobile-blindtest-panel .bt-answer-title { font-size: 26px; }
   .mobile-blindtest-panel .bt-answer-artist { font-size: 21px; }
   .mobile-blindtest-panel .bt-countdown { font-size: 20px; min-height: 24px; }
+
+  /* ----- Wishlist tab (view moved in from the desktop modal by wishlist.js) ----- */
+  .app.mobile-tab-wishlist .mobile-wishlist-panel {
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    background: #17171a;
+    padding: calc(var(--safe-top, 0px) + 16px) 16px calc(var(--bottom-nav-h) + var(--safe-bottom, 0px));
+  }
+  .app.has-player .mobile-wishlist-panel {
+    padding-bottom: calc(var(--bottom-nav-h) + var(--player-collapsed-h, 58px) + var(--safe-bottom, 0px));
+  }
+  .mobile-wishlist-panel .wl-title { font-size: 22px; }
+  .mobile-wishlist-panel .wl-label { font-size: 15px; }
+  .mobile-wishlist-panel .wl-mode button { font-size: 14px; padding: 7px 14px; }
+  /* 16px keeps iOS from zooming the page in on focus. */
+  .mobile-wishlist-panel .wl-line input { font-size: 16px; padding: 10px; flex-basis: 100%; }
+  .mobile-wishlist-panel #wlSubmitBtn { flex: 1 1 100%; font-size: 15px; padding: 11px; }
+  .mobile-wishlist-panel .wl-item { padding: 10px 0; }
+  .mobile-wishlist-panel .wl-item-title { font-size: 15px; }
+  .mobile-wishlist-panel .wl-item-artist { font-size: 13px; }
+  .mobile-wishlist-panel .wl-item-btn { width: 36px; height: 36px; }
 
   /* ----- Top bar ----- */
 

@@ -59,7 +59,7 @@ setInterval(() => {
 }, 60 * 60 * 1000).unref();
 
 if (!ADMIN_PASSWORD) {
-  logIssue('SECURITY WARNING: ADMIN_PASSWORD is not set - all write actions (upload, delete, rename, move, playlists) are locked out until it is configured. Set ADMIN_PASSWORD in docker-compose.yml and restart.');
+  logIssue('SECURITY WARNING: ADMIN_PASSWORD is not set - all write actions (upload, delete, rename, move) are locked out until it is configured. Set ADMIN_PASSWORD in docker-compose.yml and restart.');
 }
 
 function parseCookies(req) {
@@ -1984,7 +1984,7 @@ app.get('/api/playlists', (req, res) => {
   res.json(loadPlaylists());
 });
 
-app.post('/api/playlists/:name', requireAuth, async (req, res) => {
+app.post('/api/playlists/:name', async (req, res) => {
   try {
     const playlists = loadPlaylists();
     const name = req.params.name;
@@ -2004,7 +2004,7 @@ app.post('/api/playlists/:name', requireAuth, async (req, res) => {
   }
 });
 
-app.delete('/api/playlists/:name', requireAuth, async (req, res) => {
+app.delete('/api/playlists/:name', async (req, res) => {
   try {
     const playlists = loadPlaylists();
     delete playlists[req.params.name];
@@ -2016,7 +2016,7 @@ app.delete('/api/playlists/:name', requireAuth, async (req, res) => {
   }
 });
 
-app.post('/api/playlists/:name/rename', requireAuth, async (req, res) => {
+app.post('/api/playlists/:name/rename', async (req, res) => {
   try {
     const playlists = loadPlaylists();
     const oldName = req.params.name;
@@ -2034,7 +2034,7 @@ app.post('/api/playlists/:name/rename', requireAuth, async (req, res) => {
   }
 });
 
-app.post('/api/playlists/:name/remove', requireAuth, async (req, res) => {
+app.post('/api/playlists/:name/remove', async (req, res) => {
   try {
     const playlists = loadPlaylists();
     const name = req.params.name;
@@ -2049,7 +2049,7 @@ app.post('/api/playlists/:name/remove', requireAuth, async (req, res) => {
   }
 });
 
-app.post('/api/playlists/:name/reorder', requireAuth, async (req, res) => {
+app.post('/api/playlists/:name/reorder', async (req, res) => {
   try {
     const playlists = loadPlaylists();
     const name = req.params.name;
@@ -2067,6 +2067,131 @@ app.post('/api/playlists/:name/reorder', requireAuth, async (req, res) => {
     res.json({ ok: true, playlist: list });
   } catch (err) {
     logIssue(`POST /api/playlists/${req.params.name}/reorder failed: ${err.message}`);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ---- WISHLIST: songs friends suggest adding. Open to everyone, like playlists. ----
+const WISHLIST_FILE = path.join(DATA_DIR, 'wishlist.json');
+const WISH_FIELD_MAX = 200;
+const WISH_LINKS_MAX = 20;
+let wishlist = fs.existsSync(WISHLIST_FILE) ? JSON.parse(fs.readFileSync(WISHLIST_FILE, 'utf8')) : [];
+
+// Synchronous so concurrent requests can't interleave a read-modify-write.
+function saveWishlist() {
+  const tmpFile = `${WISHLIST_FILE}.tmp`;
+  fs.writeFileSync(tmpFile, JSON.stringify(wishlist, null, 2));
+  fs.renameSync(tmpFile, WISHLIST_FILE);
+}
+
+function decodeHtmlEntities(s) {
+  return s.replace(/&(#x[0-9a-f]+|#\d+|amp|quot|apos|lt|gt);/gi, (m, e) => {
+    if (e[0] === '#') return String.fromCodePoint(e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10));
+    return { amp: '&', quot: '"', apos: "'", lt: '<', gt: '>' }[e.toLowerCase()];
+  });
+}
+
+// Drops "(Official Video)", "[Lyrics]", "(4K Remaster)" and the like from a YouTube video title.
+function cleanYoutubeTitle(title) {
+  return title
+    .replace(/\s*[([][^)\]]*\b(official|video|lyrics?|audio|visuali[sz]er|mv|hd|4k|remaster(ed)?)\b[^)\]]*[)\]]/gi, '')
+    .trim();
+}
+
+async function resolveWishLink(url) {
+  const host = url.hostname.replace(/^(www|m)\./, '');
+  if (host === 'youtube.com' || host === 'music.youtube.com' || host === 'youtu.be') {
+    const r = await fetch(`https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(url.href)}`, { signal: AbortSignal.timeout(8000) });
+    if (!r.ok) throw new Error(`YouTube oEmbed returned ${r.status}`);
+    const data = await r.json();
+    const author = (data.author_name || '').replace(/\s*VEVO$/i, '');
+    // "Artist - Topic" channels are auto-generated uploads whose title is just the song.
+    if (/ - Topic$/.test(author)) return { title: data.title, artist: author.replace(/ - Topic$/, '') };
+    const title = cleanYoutubeTitle(data.title || '');
+    const idx = title.indexOf(' - ');
+    if (idx !== -1) return { artist: title.slice(0, idx).trim(), title: title.slice(idx + 3).trim() };
+    return { title, artist: author };
+  }
+  if (host === 'open.spotify.com' || host === 'spotify.link' || host === 'spotify.app.link') {
+    const r = await fetch(url.href, { signal: AbortSignal.timeout(8000) });
+    if (!r.ok) throw new Error(`Spotify returned ${r.status}`);
+    const html = await r.text();
+    const title = (html.match(/<meta property="og:title" content="([^"]*)"/) || [])[1];
+    const artists = [...html.matchAll(/<meta name="music:musician_description" content="([^"]*)"/g)].map(m => m[1]);
+    if (!title) throw new Error('No title found on Spotify page');
+    return { title: decodeHtmlEntities(title), artist: decodeHtmlEntities(artists.join(', ')) };
+  }
+  return null;
+}
+
+function isDuplicateWish(wish) {
+  const key = w => `${w.title.toLowerCase()}\u0000${w.artist.toLowerCase()}`;
+  return wishlist.some(w => (wish.url && w.url === wish.url) || ((wish.title || wish.artist) && key(w) === key(wish)));
+}
+
+function addWish(fields) {
+  const wish = {
+    id: crypto.randomUUID(),
+    title: (fields.title || '').trim().slice(0, WISH_FIELD_MAX),
+    artist: (fields.artist || '').trim().slice(0, WISH_FIELD_MAX),
+    url: fields.url || '',
+    addedAt: Date.now()
+  };
+  if (isDuplicateWish(wish)) return false;
+  wishlist.push(wish);
+  return true;
+}
+
+app.get('/api/wishlist', (req, res) => {
+  res.json(wishlist);
+});
+
+// Body is either { links: [url, ...] } or { title, artist } (one of the two may be empty).
+// A supported link whose lookup fails is still kept, shown by its URL.
+app.post('/api/wishlist', async (req, res) => {
+  try {
+    let added = 0, duplicates = 0;
+    const invalid = [];
+    if (Array.isArray(req.body.links)) {
+      const links = req.body.links.slice(0, WISH_LINKS_MAX).map(String);
+      const resolved = await Promise.all(links.map(async (link) => {
+        let url;
+        try { url = new URL(link); } catch { return null; }
+        try {
+          const meta = await resolveWishLink(url);
+          return meta && { ...meta, url: url.href };
+        } catch (err) {
+          logIssue(`Wishlist lookup failed for ${link}: ${err.message}`);
+          return { url: url.href };
+        }
+      }));
+      resolved.forEach((fields, i) => {
+        if (!fields) invalid.push(links[i]);
+        else if (addWish(fields)) added++;
+        else duplicates++;
+      });
+    } else {
+      if (!(req.body.title || '').trim() && !(req.body.artist || '').trim()) {
+        return res.status(400).json({ error: 'Enter a title or an artist' });
+      }
+      if (addWish({ title: req.body.title, artist: req.body.artist })) added++;
+      else duplicates++;
+    }
+    if (added) saveWishlist();
+    res.json({ added, duplicates, invalid, wishlist });
+  } catch (err) {
+    logIssue(`POST /api/wishlist failed: ${err.message}`);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.delete('/api/wishlist/:id', (req, res) => {
+  try {
+    wishlist = wishlist.filter(w => w.id !== req.params.id);
+    saveWishlist();
+    res.json({ ok: true, wishlist });
+  } catch (err) {
+    logIssue(`DELETE /api/wishlist/${req.params.id} failed: ${err.message}`);
     res.status(400).json({ error: err.message });
   }
 });
